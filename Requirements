@@ -1,0 +1,9 @@
+requests
+google-generativeai
+edge-tts
+openai-whisper
+moviepy==1.0.3
+pillow
+numpy
+tiktok-uploader
+playwright
