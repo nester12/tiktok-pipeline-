@@ -1,41 +1,17 @@
 name: test-post-only
 on:
   workflow_dispatch:
-    inputs:
-      video_url:
-        description: 'Optional: URL of an existing mp4 to re-use instead of rendering a new one'
-        required: false
-        default: ''
 
 jobs:
   test-post:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download a tiny sample video (if no video_url given)
-        if: ${{ github.event.inputs.video_url == '' }}
+      - name: Download a small sample video
         run: |
-          curl -L -o final_short.mp4 "https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_Trailer_400p.ogv/Big_Buck_Bunny_Trailer_400p.ogv.360p.webm" || \
           curl -L -o final_short.mp4 "https://filesamples.com/samples/video/mp4/sample_640x360.mp4"
           ls -la final_short.mp4
-
-      - name: Use provided video_url directly (skip hosting step)
-        if: ${{ github.event.inputs.video_url != '' }}
-        run: echo "video_url=${{ github.event.inputs.video_url }}" >> "$GITHUB_ENV"
-
-      - name: Host video as a GitHub Release asset (public URL for Buffer)
-        if: ${{ github.event.inputs.video_url == '' }}
-        id: host_video
-        run: |
-          TAG="test-${{ github.run_id }}"
-          gh release create "$TAG" final_short.mp4 --title "$TAG" --notes "Test upload"
-          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/final_short.mp4"
-          echo "video_url=$URL" >> "$GITHUB_OUTPUT"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,9 +21,16 @@ jobs:
       - name: Install deps
         run: pip install requests
 
+      - name: Host video on Cloudinary (public URL for Buffer)
+        id: host_video
+        run: python upload_to_cloudinary.py
+        env:
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
+
       - name: Post to TikTok via Buffer
         run: python upload.py
         env:
           BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
           BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
-          VIDEO_URL: ${{ steps.host_video.outputs.video_url || github.event.inputs.video_url }}
+          VIDEO_URL: ${{ steps.host_video.outputs.video_url }}
