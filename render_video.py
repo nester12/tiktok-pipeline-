@@ -14,11 +14,11 @@ OUTPUT_VIDEO = "final_short.mp4"
 
 
 def create_caption_image(text, size=(1080, 1920)):
-    """Draws large, high-contrast TikTok captions onto a transparent canvas."""
+    """Draws smaller, quick-read TikTok captions onto a transparent canvas."""
     img = Image.new("RGBA", size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    font_size = 82
+    font_size = 58  # reduced from 82 for faster reading, less screen dominance
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
     except Exception:
@@ -29,9 +29,9 @@ def create_caption_image(text, size=(1080, 1920)):
     text_w = bbox[2] - bbox[0]
 
     x = (size[0] - text_w) / 2
-    y = int(size[1] * 0.58)
+    y = int(size[1] * 0.62)
 
-    stroke_width = 7
+    stroke_width = 5
     stroke_color = "black"
     text_color = "#FFE600"
 
@@ -78,7 +78,7 @@ def main():
 
     bg_clip = bg_clip.resize((target_w, target_h))
 
-    print("🎨 Building large caption overlay sequence...")
+    print("🎨 Building quick-read caption overlay sequence...")
     caption_clips = []
 
     for entry in word_data:
@@ -87,8 +87,9 @@ def main():
             continue
 
         start_t = entry["start"]
-        end_t = min(entry["end"] + 0.1, audio_duration)
-        duration = max(end_t - start_t, 0.15)
+        # Tighter timing: less lingering padding so captions feel snappier
+        end_t = min(entry["end"] + 0.03, audio_duration)
+        duration = max(end_t - start_t, 0.12)
 
         if duration > 0:
             cap_img = create_caption_image(word)
@@ -98,7 +99,7 @@ def main():
                         .set_position(("center", "center")))
             caption_clips.append(txt_clip)
 
-    print("⚡ Compositing video, voiceover, and large captions...")
+    print("⚡ Compositing video, voiceover, and captions...")
     final_clip = CompositeVideoClip([bg_clip] + caption_clips, size=(target_w, target_h))
     final_clip = final_clip.set_audio(audio_clip).set_duration(audio_duration)
 
@@ -111,7 +112,7 @@ def main():
         threads=4
     )
 
-    print(f"\n🎉 SUCCESS! Rendered with large, high-visibility captions -> '{OUTPUT_VIDEO}'")
+    print(f"\n🎉 SUCCESS! Rendered with quick-read captions -> '{OUTPUT_VIDEO}'")
 
 
 if __name__ == "__main__":
