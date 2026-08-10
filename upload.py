@@ -5,7 +5,7 @@ import os
 import sys
 import requests
 
-BUFFER_GRAPHQL_URL = "https://graph.buffer.com"
+BUFFER_GRAPHQL_URL = "https://api.buffer.com"
 CAPTION = "Caught my business partner draining company funds! #storytime #redditstories #fyp"
 
 CREATE_POST_MUTATION = """
