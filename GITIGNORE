@@ -1,0 +1,7 @@
+*.mp4
+*.mp3
+story.txt
+timestamps.json
+__pycache__/
+*.pyc
+.DS_Store
