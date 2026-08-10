@@ -11,11 +11,12 @@ STORY_FILE = "story.txt"
 AUDIO_FILE = "narration.mp3"
 JSON_FILE = "timestamps.json"
 VOICE = "en-US-ChristopherNeural"
+RATE = "+15%"  # speeds up narration pace for snappier TikTok pacing
 
 
 async def generate_audio(story_text):
-    print(f"🎙️ Generating voiceover audio with voice '{VOICE}'...")
-    communicate = edge_tts.Communicate(story_text, VOICE)
+    print(f"🎙️ Generating voiceover audio with voice '{VOICE}' at rate {RATE}...")
+    communicate = edge_tts.Communicate(story_text, VOICE, rate=RATE)
     await communicate.save(AUDIO_FILE)
     print(f"✅ Voiceover saved as '{AUDIO_FILE}'!")
 
@@ -27,10 +28,8 @@ def main():
     with open(STORY_FILE, "r", encoding="utf-8") as f:
         story_text = f.read().strip()
 
-    # 1. Generate voiceover audio
     asyncio.run(generate_audio(story_text))
 
-    # 2. Extract precise word timestamps with Whisper
     print("⏳ Analyzing speech audio with Whisper for word timestamps...")
     model = whisper.load_model("tiny")
     result = model.transcribe(AUDIO_FILE, word_timestamps=True)
