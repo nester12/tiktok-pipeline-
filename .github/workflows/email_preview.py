@@ -1,42 +1,69 @@
-name: preview-pipeline
-on:
-  workflow_dispatch:   # manual trigger only — this never posts to TikTok
+# -------------------------------------------------------------------
+# Email the rendered video to yourself for review, instead of posting
+# -------------------------------------------------------------------
+import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 
-jobs:
-  generate-and-preview:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+VIDEO_PATH = "final_short.mp4"
+STORY_PATH = "story.txt"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
 
-      - name: Install ffmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+def main():
+    gmail_address = os.environ.get("GMAIL_ADDRESS")
+    gmail_app_password = os.environ.get("GMAIL_APP_PASSWORD")
+    send_to = os.environ.get("EMAIL_TO", gmail_address)
 
-      - name: Install Python deps
-        run: pip install -r requirements.txt
+    missing = [n for n, v in [
+        ("GMAIL_ADDRESS", gmail_address),
+        ("GMAIL_APP_PASSWORD", gmail_app_password),
+    ] if not v]
+    if missing:
+        raise ValueError(f"❌ Missing required environment variable(s): {', '.join(missing)}")
 
-      - name: Fetch background video (with AI review)
-        run: python fetch_background.py
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    if not os.path.exists(VIDEO_PATH):
+        raise FileNotFoundError(f"❌ '{VIDEO_PATH}' missing! Run render_video.py first.")
 
-      - name: Generate voiceover + timestamps (also generates the story internally)
-        run: python generate_audio.py
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    story_text = ""
+    if os.path.exists(STORY_PATH):
+        with open(STORY_PATH, "r", encoding="utf-8") as f:
+            story_text = f.read()
 
-      - name: Render video
-        run: python render_video.py
+    print(f"📧 Preparing preview email to {send_to}...")
 
-      - name: Email video for review (no posting)
-        run: python email_preview.py
-        env:
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+    msg = MIMEMultipart()
+    msg["From"] = gmail_address
+    msg["To"] = send_to
+    msg["Subject"] = "🎬 New pipeline preview — TikTok video ready for review"
+
+    body = (
+        "Here's your latest pipeline output for review before it goes live.\n\n"
+        "Story text:\n"
+        "-----------\n"
+        f"{story_text}\n\n"
+        "Video is attached — watch it and see how the captions, pacing, and "
+        "background feel before we turn auto-posting back on.\n"
+    )
+    msg.attach(MIMEText(body, "plain"))
+
+    with open(VIDEO_PATH, "rb") as f:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(f.read())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f"attachment; filename=final_short.mp4")
+    msg.attach(part)
+
+    print("📤 Sending email via Gmail SMTP...")
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(gmail_address, gmail_app_password)
+        server.send_message(msg)
+
+    print(f"\n✅ Preview email sent to {send_to}!")
+
+
+if __name__ == "__main__":
+    main()
