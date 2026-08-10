@@ -9,7 +9,7 @@ BUFFER_GRAPHQL_URL = "https://api.buffer.com"
 CAPTION = "Caught my business partner draining company funds! #storytime #redditstories #fyp"
 
 CREATE_POST_MUTATION = """
-mutation CreatePost($channelId: String!, $text: String!, $videoUrl: String!) {
+mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) {
   createPost(
     input: {
       text: $text
