@@ -10,8 +10,9 @@ jobs:
 
       - name: Download a small sample video
         run: |
-          curl -L -o final_short.mp4 "https://filesamples.com/samples/video/mp4/sample_640x360.mp4"
+          curl -L -o final_short.mp4 "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
           ls -la final_short.mp4
+          file final_short.mp4
 
       - name: Set up Python
         uses: actions/setup-python@v5
