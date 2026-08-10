@@ -4,9 +4,7 @@
 import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
-from email import encoders
 
 VIDEO_PATH = "final_short.mp4"
 STORY_PATH = "story.txt"
@@ -16,16 +14,15 @@ def main():
     gmail_address = os.environ.get("GMAIL_ADDRESS")
     gmail_app_password = os.environ.get("GMAIL_APP_PASSWORD")
     send_to = os.environ.get("EMAIL_TO", gmail_address)
+    video_url = os.environ.get("VIDEO_URL")
 
     missing = [n for n, v in [
         ("GMAIL_ADDRESS", gmail_address),
         ("GMAIL_APP_PASSWORD", gmail_app_password),
+        ("VIDEO_URL", video_url),
     ] if not v]
     if missing:
         raise ValueError(f"❌ Missing required environment variable(s): {', '.join(missing)}")
-
-    if not os.path.exists(VIDEO_PATH):
-        raise FileNotFoundError(f"❌ '{VIDEO_PATH}' missing! Run render_video.py first.")
 
     story_text = ""
     if os.path.exists(STORY_PATH):
@@ -44,17 +41,10 @@ def main():
         "Story text:\n"
         "-----------\n"
         f"{story_text}\n\n"
-        "Video is attached — watch it and see how the captions, pacing, and "
-        "background feel before we turn auto-posting back on.\n"
+        f"Watch it here:\n{video_url}\n\n"
+        "Check the captions, pacing, and background before we turn auto-posting back on.\n"
     )
     msg.attach(MIMEText(body, "plain"))
-
-    with open(VIDEO_PATH, "rb") as f:
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(f.read())
-    encoders.encode_base64(part)
-    part.add_header("Content-Disposition", f"attachment; filename=final_short.mp4")
-    msg.attach(part)
 
     print("📤 Sending email via Gmail SMTP...")
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
