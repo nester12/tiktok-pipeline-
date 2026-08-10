@@ -19,9 +19,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
 
       - name: Install Python deps
-        run: |
-          pip install -r requirements.txt
-          playwright install chromium
+        run: pip install -r requirements.txt
 
       - name: Fetch background video
         run: python fetch_background.py
@@ -45,7 +43,7 @@ jobs:
         run: |
           TAG="run-${{ github.run_id }}"
           gh release create "$TAG" final_short.mp4 --title "$TAG" --notes "Automated pipeline output"
-          URL=$(gh release view "$TAG" --json assets -q '.assets[0].url')
+          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/final_short.mp4"
           echo "video_url=$URL" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
