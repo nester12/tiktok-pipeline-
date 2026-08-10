@@ -3,7 +3,7 @@ google-generativeai
 edge-tts
 openai-whisper
 moviepy==1.0.3
-pillow
+pillow==9.5.0
 numpy
 tiktok-uploader
 playwright
