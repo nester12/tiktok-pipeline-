@@ -90,10 +90,31 @@ def generate_with_gemini(gemini_key, prompt):
     return model.generate_content(prompt).text.strip()
 
 
+def generate_with_nvidia(nvidia_key, prompt):
+    print("🟩 Generating story using NVIDIA NIM (DeepSeek V4)...")
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": "deepseek-ai/deepseek-v4",
+        "messages": [
+            {"role": "system", "content": "You are a master storyteller writing viral, relatable TikTok Reddit scripts."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.9,
+        "max_tokens": 700
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"].strip()
+    raise Exception(f"NVIDIA NIM API Error ({response.status_code}): {response.text}")
+
+
 def generate_story(word_target=240, niche=None):
-    """Generates a story of roughly word_target words. Returns the story text."""
+    """Generates a story of roughly word_target words. Returns the story text.
+    Tries Groq first, then Gemini, then NVIDIA NIM (DeepSeek V4) as a fallback."""
     groq_key = os.environ.get("GROQ_API_KEY")
     gemini_key = os.environ.get("GEMINI_API_KEY")
+    nvidia_key = os.environ.get("NVIDIA_API_KEY")
 
     if niche is None:
         niche = random.choice(STORY_NICHES)
@@ -113,8 +134,14 @@ def generate_story(word_target=240, niche=None):
         except Exception as e:
             print(f"⚠️ Gemini generation failed: {e}")
 
+    if not story_text and nvidia_key:
+        try:
+            story_text = generate_with_nvidia(nvidia_key, prompt)
+        except Exception as e:
+            print(f"⚠️ NVIDIA NIM generation failed: {e}")
+
     if not story_text:
-        raise ValueError("❌ Neither GROQ_API_KEY nor GEMINI_API_KEY produced a story!")
+        raise ValueError("❌ None of GROQ_API_KEY, GEMINI_API_KEY, or NVIDIA_API_KEY produced a story!")
 
     return story_text
 
