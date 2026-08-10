@@ -1,13 +1,22 @@
 # -------------------------------------------------------------------
-# Fetch a background video from Pexels (replaces the manual
-# drag-and-drop upload cell, which won't work in headless Actions)
+# Fetch a background video from Pexels — chosen for high motion /
+# attention-grabbing footage that works well under text captions
 # -------------------------------------------------------------------
 import os
 import random
 import requests
 
 OUTPUT_FILE = "background.mp4"
-SEARCH_TERMS = ["minecraft parkour", "satisfying", "subway surfers", "gta gameplay"]
+SEARCH_TERMS = [
+    "minecraft parkour gameplay",
+    "subway surfers gameplay",
+    "satisfying slime asmr",
+    "gta 5 driving gameplay",
+    "extreme sports action",
+    "obstacle course fail",
+    "oddly satisfying cutting",
+    "car drifting close up",
+]
 
 
 def main():
@@ -28,10 +37,20 @@ def main():
     videos = resp.json().get("videos", [])
 
     if not videos:
+        # fallback to a safe, always-available search term
+        query = "satisfying"
+        resp = requests.get(
+            "https://api.pexels.com/videos/search",
+            headers=headers,
+            params={"query": query, "orientation": "portrait", "per_page": 15}
+        )
+        resp.raise_for_status()
+        videos = resp.json().get("videos", [])
+
+    if not videos:
         raise ValueError(f"❌ No Pexels results for '{query}'")
 
     video = random.choice(videos)
-    # pick the highest-res vertical file available
     file_url = sorted(video["video_files"], key=lambda f: f.get("height", 0), reverse=True)[0]["link"]
 
     print(f"⬇️ Downloading background video...")
