@@ -7,6 +7,8 @@ on:
 jobs:
   generate-and-post:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -38,15 +40,12 @@ jobs:
       - name: Render video
         run: python render_video.py
 
-      - name: Host video as a GitHub Release asset (public URL for Buffer)
+      - name: Host video on Cloudinary (public URL for Buffer)
         id: host_video
-        run: |
-          TAG="run-${{ github.run_id }}"
-          gh release create "$TAG" final_short.mp4 --title "$TAG" --notes "Automated pipeline output"
-          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/final_short.mp4"
-          echo "video_url=$URL" >> "$GITHUB_OUTPUT"
+        run: python upload_to_cloudinary.py
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
 
       - name: Post to TikTok via Buffer
         run: python upload.py
