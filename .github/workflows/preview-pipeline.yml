@@ -34,9 +34,17 @@ jobs:
       - name: Render video
         run: python render_video.py
 
-      - name: Email video for review (no posting)
+      - name: Host video on Cloudinary (public URL)
+        id: host_video
+        run: python upload_to_cloudinary.py
+        env:
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
+
+      - name: Email video link for review (no posting)
         run: python email_preview.py
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          VIDEO_URL: ${{ steps.host_video.outputs.video_url }}
