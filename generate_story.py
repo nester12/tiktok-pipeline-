@@ -7,7 +7,6 @@ import requests
 
 STORY_OUTPUT_FILE = "story.txt"
 
-# Rotate through several relatable niches instead of only business stories
 STORY_NICHES = [
     "a shocking family secret discovered at a holiday dinner",
     "a roommate who crossed every boundary imaginable",
@@ -21,16 +20,7 @@ STORY_NICHES = [
     "a stranger's act of kindness that changed a bad day",
 ]
 
-STORY_PROMPT_TEMPLATE = (
-    "Write a viral, dramatic, first-person Reddit-style story for a 45-second TikTok video, "
-    "about {niche}. "
-    "Start immediately with a shocking hook in the first sentence. "
-    "Make it deeply relatable and emotional — the kind of story someone would send to a friend "
-    "saying 'you won't believe this happened to me.' Use everyday, conversational language, "
-    "short punchy sentences, and a clear emotional arc (setup, escalation, twist or resolution). "
-    "Keep sentences short and fast-paced for text-to-speech narration.\n\n"
-    "Here are three examples of the exact rhythm, pacing, and sentence length to match "
-    "(do not reuse their topics or details, only match the style):\n\n"
+EXAMPLES = (
     "EXAMPLE 1:\n"
     "My sister asked me to babysit for 'an hour.' That was six hours ago. "
     "I called her twenty times. Nothing. Then I checked her location. "
@@ -50,19 +40,33 @@ STORY_PROMPT_TEMPLATE = (
     "Broken heater. Mold in the hallway. No fire extinguishers. I emailed the housing board "
     "that same night. Three weeks later, inspectors showed up unannounced. "
     "My rent increase mysteriously disappeared. Funny how that works.\n\n"
-    "Now write a brand new story in that same style, about {niche}. "
-    "Do NOT include titles, markdown headers (* or #), hashtags, stage directions, or quotes. "
-    "Output ONLY the raw story text."
 )
+
+
+def build_prompt(niche, word_target):
+    return (
+        f"Write a viral, dramatic, first-person Reddit-style story for a TikTok video, "
+        f"about {niche}. "
+        f"The story MUST be approximately {word_target} words long — this is important, "
+        f"do not go far under or over that word count. "
+        "Start immediately with a shocking hook in the first sentence. "
+        "Make it deeply relatable and emotional — the kind of story someone would send to a friend "
+        "saying 'you won't believe this happened to me.' Use everyday, conversational language, "
+        "short punchy sentences, and a clear emotional arc (setup, escalation, twist or resolution). "
+        "Keep sentences short and fast-paced for text-to-speech narration.\n\n"
+        "Here are three examples of the exact rhythm, pacing, and sentence length to match "
+        "(do not reuse their topics or details, only match the style and length proportionally):\n\n"
+        f"{EXAMPLES}"
+        f"Now write a brand new story of about {word_target} words in that same style, about {niche}. "
+        "Do NOT include titles, markdown headers (* or #), hashtags, stage directions, or quotes. "
+        "Output ONLY the raw story text."
+    )
 
 
 def generate_with_groq(groq_key, prompt):
     print("⚡ Generating story using Groq API (Llama 3.3)...")
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {groq_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
@@ -70,14 +74,12 @@ def generate_with_groq(groq_key, prompt):
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.9,
-        "max_tokens": 400
+        "max_tokens": 700
     }
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
-    else:
-        raise Exception(f"Groq API Error ({response.status_code}): {response.text}")
+        return response.json()["choices"][0]["message"]["content"].strip()
+    raise Exception(f"Groq API Error ({response.status_code}): {response.text}")
 
 
 def generate_with_gemini(gemini_key, prompt):
@@ -85,20 +87,20 @@ def generate_with_gemini(gemini_key, prompt):
     import google.generativeai as genai
     genai.configure(api_key=gemini_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
-    response = model.generate_content(prompt)
-    return response.text.strip()
+    return model.generate_content(prompt).text.strip()
 
 
-def main():
+def generate_story(word_target=240, niche=None):
+    """Generates a story of roughly word_target words. Returns the story text."""
     groq_key = os.environ.get("GROQ_API_KEY")
     gemini_key = os.environ.get("GEMINI_API_KEY")
 
-    niche = random.choice(STORY_NICHES)
-    prompt = STORY_PROMPT_TEMPLATE.format(niche=niche)
-    print(f"🎯 Chosen niche: {niche}")
+    if niche is None:
+        niche = random.choice(STORY_NICHES)
+    prompt = build_prompt(niche, word_target)
+    print(f"🎯 Niche: {niche} | Target words: {word_target}")
 
     story_text = ""
-
     if groq_key:
         try:
             story_text = generate_with_groq(groq_key, prompt)
@@ -112,14 +114,16 @@ def main():
             print(f"⚠️ Gemini generation failed: {e}")
 
     if not story_text:
-        raise ValueError(
-            "❌ Neither GROQ_API_KEY nor GEMINI_API_KEY was found or valid in environment variables!"
-        )
+        raise ValueError("❌ Neither GROQ_API_KEY nor GEMINI_API_KEY produced a story!")
 
+    return story_text
+
+
+def main():
+    story_text = generate_story()
     with open(STORY_OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(story_text)
-
-    print(f"\n✅ Story generated successfully and saved to '{STORY_OUTPUT_FILE}'!\n")
+    print(f"\n✅ Story saved to '{STORY_OUTPUT_FILE}' ({len(story_text.split())} words)\n")
     print("=" * 60)
     print(story_text)
     print("=" * 60)
