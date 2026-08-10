@@ -29,6 +29,8 @@ def main():
             timeout=120,
         )
 
+    if resp.status_code != 200:
+        print(f"❌ Cloudinary error response: {resp.text}")
     resp.raise_for_status()
     data = resp.json()
 
