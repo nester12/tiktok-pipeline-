@@ -1,54 +1,87 @@
 # -------------------------------------------------------------------
-# TikTok Upload
+# Post to TikTok via Buffer's GraphQL API
 # -------------------------------------------------------------------
 import os
-from tiktok_uploader.upload import upload_video
+import sys
+import requests
 
-VIDEO_PATH = "final_short.mp4"
+BUFFER_GRAPHQL_URL = "https://graph.buffer.com"
 CAPTION = "Caught my business partner draining company funds! #storytime #redditstories #fyp"
-COOKIES_FILE = "cookies.txt"
 
-
-def write_cookies_file(session_id):
-    """
-    Writes a Netscape-format cookies file with a proper domain,
-    which avoids the 'Cookie should have a url or a domain/path pair'
-    error that happens when passing a bare sessionid string.
-    """
-    # Netscape cookie file format:
-    # domain  include_subdomains  path  secure  expiry  name  value
-    line = "\t".join([
-        ".tiktok.com", "TRUE", "/", "TRUE", "2147483647",
-        "sessionid", session_id
-    ])
-    with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-        f.write("# Netscape HTTP Cookie File\n")
-        f.write(line + "\n")
+CREATE_POST_MUTATION = """
+mutation CreatePost($channelId: String!, $text: String!, $videoUrl: String!) {
+  createPost(
+    input: {
+      text: $text
+      channelId: $channelId
+      schedulingType: automatic
+      mode: addToQueue
+      assets: [
+        { video: { url: $videoUrl } }
+      ]
+    }
+  ) {
+    ... on PostActionSuccess {
+      post {
+        id
+        dueAt
+      }
+    }
+    ... on MutationError {
+      message
+    }
+  }
+}
+"""
 
 
 def main():
-    session_id = os.environ.get("TIKTOK_SESSION_ID")
+    token = os.environ.get("BUFFER_ACCESS_TOKEN")
+    channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
+    video_url = os.environ.get("VIDEO_URL")
 
-    if not session_id:
-        raise ValueError("❌ 'TIKTOK_SESSION_ID' missing from environment (GitHub Actions secret)!")
+    missing = [name for name, val in [
+        ("BUFFER_ACCESS_TOKEN", token),
+        ("BUFFER_TIKTOK_CHANNEL_ID", channel_id),
+        ("VIDEO_URL", video_url),
+    ] if not val]
 
-    if not os.path.exists(VIDEO_PATH):
-        raise FileNotFoundError(f"❌ '{VIDEO_PATH}' missing! Run render_video.py first.")
+    if missing:
+        raise ValueError(f"❌ Missing required environment variable(s): {', '.join(missing)}")
 
-    write_cookies_file(session_id)
+    print(f"📤 Posting to TikTok via Buffer...")
+    print(f"   Video URL: {video_url}")
 
-    print("🚀 Launching Chrome in clean process...")
-    try:
-        upload_video(
-            filename=VIDEO_PATH,
-            description=CAPTION,
-            cookies=COOKIES_FILE,
-            headless=True
-        )
-        print("\n🎉 SUCCESS! Your video has been posted to TikTok!")
-    except Exception as e:
-        print(f"\n❌ Upload failed: {e}")
-        raise
+    resp = requests.post(
+        BUFFER_GRAPHQL_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "query": CREATE_POST_MUTATION,
+            "variables": {
+                "channelId": channel_id,
+                "text": CAPTION,
+                "videoUrl": video_url,
+            },
+        },
+        timeout=60,
+    )
+
+    data = resp.json()
+    print(data)
+
+    result = data.get("data", {}).get("createPost", {})
+
+    if result.get("message"):
+        raise RuntimeError(f"❌ Buffer rejected the post: {result['message']}")
+
+    post = result.get("post")
+    if post:
+        print(f"\n🎉 SUCCESS! Queued on Buffer — post id {post['id']}, due {post.get('dueAt')}")
+    else:
+        raise RuntimeError(f"❌ Unexpected response from Buffer: {data}")
 
 
 if __name__ == "__main__":
