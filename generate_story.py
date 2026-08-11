@@ -2,10 +2,12 @@
 # Story Generator (Groq & Gemini support)
 # -------------------------------------------------------------------
 import os
+import json
 import random
 import requests
 
 STORY_OUTPUT_FILE = "story.txt"
+STYLE_EXAMPLES_FILE = "style_examples.json"
 
 STORY_NICHES = [
     "a shocking family secret discovered at a holiday dinner",
@@ -43,7 +45,30 @@ EXAMPLES = (
 )
 
 
+def load_examples_text():
+    """
+    Uses real transcripts pulled from example TikTok accounts
+    (via fetch_style_examples.py) if available, falling back to
+    the hand-written examples otherwise.
+    """
+    if os.path.exists(STYLE_EXAMPLES_FILE):
+        try:
+            with open(STYLE_EXAMPLES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data:
+                sample = random.sample(data, min(3, len(data)))
+                text = ""
+                for i, ex in enumerate(sample, 1):
+                    text += f"EXAMPLE {i} (from @{ex['handle']}):\n{ex['transcript']}\n\n"
+                return text
+        except Exception as e:
+            print(f"⚠️ Could not load {STYLE_EXAMPLES_FILE}, using default examples: {e}")
+
+    return EXAMPLES
+
+
 def build_prompt(niche, word_target):
+    examples_text = load_examples_text()
     return (
         f"Write a viral, dramatic, first-person Reddit-style story for a TikTok video, "
         f"about {niche}. "
@@ -62,7 +87,7 @@ def build_prompt(niche, word_target):
         "but let it breathe like real spoken storytelling.\n\n"
         "Here are three examples of the exact rhythm, flow, and natural spoken pacing to match "
         "(do not reuse their topics or details, only match the style and length proportionally):\n\n"
-        f"{EXAMPLES}"
+        f"{examples_text}"
         f"Now write a brand new story of about {word_target} words in that same flowing, "
         f"narrated-aloud style, about {niche}. "
         "Do NOT include titles, markdown headers (* or #), hashtags, stage directions, or quotes. "
