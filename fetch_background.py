@@ -1,19 +1,14 @@
 # -------------------------------------------------------------------
-# Fetch background footage from a specific CC BY 4.0 licensed
-# Minecraft parkour video, downloaded fresh via yt-dlp each run.
-# A random ~90s segment is sliced out so footage varies run to run.
-#
-# Attribution (required by CC BY 4.0):
-# Video by GameplaysForFree, licensed under CC BY 4.0
-# https://creativecommons.org/licenses/by/4.0/
-# Source: https://youtu.be/EtVOvPyuOjk
+# Fetch background footage from a Google Drive file (public link),
+# downloaded fresh via gdown each run. A random ~90s segment is
+# sliced out so footage varies run to run even from one source file.
 # -------------------------------------------------------------------
 import os
 import random
 import subprocess
 from moviepy.editor import VideoFileClip
 
-SOURCE_YOUTUBE_URL = "https://www.youtube.com/watch?v=EtVOvPyuOjk"
+DRIVE_FILE_ID = "1KGqdG2TwoTlrlzwmumV_91EJxnZ3T_Yh"
 SOURCE_FILE = "bg_source.mp4"
 OUTPUT_FILE = "background.mp4"
 
@@ -21,10 +16,9 @@ TARGET_DURATION = 130  # generous cushion above the 60-120s story length
 
 
 def download_source_video():
-    print(f"⬇️ Downloading source parkour footage via yt-dlp...")
+    print(f"⬇️ Downloading source parkour footage from Google Drive...")
     subprocess.run(
-        ["yt-dlp", "-f", "bestvideo[ext=mp4]/best[ext=mp4]/best",
-         "-o", SOURCE_FILE, SOURCE_YOUTUBE_URL],
+        ["gdown", f"https://drive.google.com/uc?id={DRIVE_FILE_ID}", "-O", SOURCE_FILE],
         check=True
     )
 
@@ -49,7 +43,6 @@ def main():
     clip.close()
 
     print(f"\n✅ Background segment saved to '{OUTPUT_FILE}'")
-    print("ℹ️ Remember: this footage requires CC BY 4.0 attribution to 'GameplaysForFree' in the post caption.")
 
 
 if __name__ == "__main__":
