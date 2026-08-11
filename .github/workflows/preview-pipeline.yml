@@ -19,7 +19,7 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Fetch background video (via yt-dlp, CC BY 4.0 source)
+      - name: Fetch background video (from Google Drive)
         run: python fetch_background.py
 
       - name: Generate voiceover + timestamps (also generates the story internally)
