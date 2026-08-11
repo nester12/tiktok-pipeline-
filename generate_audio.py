@@ -16,7 +16,7 @@ import random
 STORY_FILE = "story.txt"
 AUDIO_FILE = "narration.mp3"
 JSON_FILE = "timestamps.json"
-VOICE = "en-US-ChristopherNeural"
+VOICE = "en-US-AndrewNeural"  # warmer, more expressive narrator-style voice
 RATE = "+15%"
 
 MIN_DURATION = 60
