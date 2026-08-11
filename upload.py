@@ -6,7 +6,25 @@ import sys
 import requests
 
 BUFFER_GRAPHQL_URL = "https://api.buffer.com"
-CAPTION = "Caught my business partner draining company funds! #storytime #redditstories #fyp"
+STORY_FILE = "story.txt"
+
+ATTRIBUTION = "Background footage by GameplaysForFree, licensed under CC BY 4.0"
+HASHTAGS = "#storytime #redditstories #fyp"
+
+
+def build_caption():
+    """Uses the first sentence of the generated story as a hook, plus
+    required CC BY 4.0 attribution for the background footage."""
+    hook = "You won't believe what happened to me..."
+    if os.path.exists(STORY_FILE):
+        with open(STORY_FILE, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        if text:
+            first_sentence = text.split(".")[0].strip()
+            if first_sentence:
+                hook = first_sentence + "..."
+
+    return f"{hook} {HASHTAGS}\n\n{ATTRIBUTION}"
 
 CREATE_POST_MUTATION = """
 mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) {
@@ -52,6 +70,9 @@ def main():
     print(f"📤 Posting to TikTok via Buffer...")
     print(f"   Video URL: {video_url}")
 
+    caption = build_caption()
+    print(f"   Caption: {caption}")
+
     resp = requests.post(
         BUFFER_GRAPHQL_URL,
         headers={
@@ -62,7 +83,7 @@ def main():
             "query": CREATE_POST_MUTATION,
             "variables": {
                 "channelId": channel_id,
-                "text": CAPTION,
+                "text": caption,
                 "videoUrl": video_url,
             },
         },
