@@ -23,17 +23,15 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Fetch background video (with AI review)
+      - name: Fetch background video (via yt-dlp, CC BY 4.0 source)
         run: python fetch_background.py
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: Generate voiceover + timestamps (also generates the story internally, with length-retry loop)
         run: python generate_audio.py
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
 
       - name: Render video
         run: python render_video.py
