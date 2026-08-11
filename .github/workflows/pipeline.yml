@@ -1,14 +1,12 @@
 name: content-pipeline
 on:
   schedule:
-    - cron: '0 14 * * *'   # runs daily at 14:00 UTC — edit as needed
+    - cron: '0 12 * * *'   # runs once daily at 12:00 UTC, generating 4 videos in sequence
   workflow_dispatch:        # lets you trigger it manually from the Actions tab
 
 jobs:
   generate-and-post:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -23,29 +21,30 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Fetch background video (from Google Drive)
-        run: python fetch_background.py
+      - name: Generate and queue 4 videos (2 min apart)
+        run: |
+          for i in 1 2 3 4; do
+            echo "=================================================="
+            echo "🎬 Video $i of 4"
+            echo "=================================================="
+            python fetch_background.py
+            python generate_audio.py
+            python render_video.py
+            python upload_to_cloudinary.py
+            export VIDEO_URL=$(cat video_url.txt)
+            echo "📌 Using video URL: $VIDEO_URL"
+            python upload.py
 
-      - name: Generate voiceover + timestamps (also generates the story internally, with length-retry loop)
-        run: python generate_audio.py
+            if [ "$i" -lt 4 ]; then
+              echo "⏳ Waiting 2 minutes before next video..."
+              sleep 120
+            fi
+          done
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-
-      - name: Render video
-        run: python render_video.py
-
-      - name: Host video on Cloudinary (public URL for Buffer)
-        id: host_video
-        run: python upload_to_cloudinary.py
-        env:
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
-
-      - name: Post to TikTok via Buffer
-        run: python upload.py
-        env:
           BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
           BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
-          VIDEO_URL: ${{ steps.host_video.outputs.video_url }}
