@@ -13,7 +13,7 @@ import random
 import subprocess
 from moviepy.editor import VideoFileClip
 
-SOURCE_YOUTUBE_URL = "https://youtu.be/EtVOvPyuOjk"
+SOURCE_YOUTUBE_URL = "https://www.youtube.com/watch?v=EtVOvPyuOjk"
 SOURCE_FILE = "bg_source.mp4"
 OUTPUT_FILE = "background.mp4"
 
