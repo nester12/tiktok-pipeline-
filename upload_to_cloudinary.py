@@ -40,7 +40,12 @@ def main():
 
     print(f"✅ Uploaded! Public URL: {secure_url}")
 
-    # Make it available to the next GitHub Actions step
+    # Write to a plain file so it can be read reliably inside a bash loop
+    # (GitHub's step-output mechanism only captures once per step, not per iteration)
+    with open("video_url.txt", "w") as f:
+        f.write(secure_url)
+
+    # Also make it available via step outputs, for single-run use cases
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a") as f:
