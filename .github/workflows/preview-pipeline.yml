@@ -1,10 +1,14 @@
-name: preview-pipeline
+name: content-pipeline
 on:
-  workflow_dispatch:   # manual trigger only — this never posts to TikTok
+  schedule:
+    - cron: '0 14 * * *'   # runs daily at 14:00 UTC — edit as needed
+  workflow_dispatch:        # lets you trigger it manually from the Actions tab
 
 jobs:
-  generate-and-preview:
+  generate-and-post:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -19,32 +23,29 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Fetch background video (with AI review)
+      - name: Fetch background video (via yt-dlp, CC BY 4.0 source)
         run: python fetch_background.py
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-      - name: Generate voiceover + timestamps (also generates the story internally)
+      - name: Generate voiceover + timestamps (also generates the story internally, with length-retry loop)
         run: python generate_audio.py
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
 
       - name: Render video
         run: python render_video.py
 
-      - name: Host video on Cloudinary (public URL)
+      - name: Host video on Cloudinary (public URL for Buffer)
         id: host_video
         run: python upload_to_cloudinary.py
         env:
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
 
-      - name: Email video link for review (no posting)
-        run: python email_preview.py
+      - name: Post to TikTok via Buffer
+        run: python upload.py
         env:
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
           VIDEO_URL: ${{ steps.host_video.outputs.video_url }}
