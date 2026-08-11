@@ -1,0 +1,32 @@
+name: update-style-examples
+on:
+  workflow_dispatch:   # run this manually, occasionally — not on every post
+
+jobs:
+  update-examples:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Fetch style examples from SocialCrawl
+        run: python fetch_style_examples.py
+        env:
+          SOCIALCRAWL_API_KEY: ${{ secrets.SOCIALCRAWL_API_KEY }}
+
+      - name: Commit updated style_examples.json
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add style_examples.json
+          git diff --staged --quiet || git commit -m "Update style_examples.json from SocialCrawl"
+          git push
