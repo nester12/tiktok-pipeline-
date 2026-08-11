@@ -27,6 +27,10 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add style_examples.json
-          git diff --staged --quiet || git commit -m "Update style_examples.json from SocialCrawl"
-          git push
+          if [ -f style_examples.json ]; then
+            git add style_examples.json
+            git diff --staged --quiet || git commit -m "Update style_examples.json from SocialCrawl"
+            git push
+          else
+            echo "⚠️ No style_examples.json was created this run — nothing to commit."
+          fi
