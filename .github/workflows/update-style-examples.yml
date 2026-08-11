@@ -1,6 +1,8 @@
 name: update-style-examples
 on:
-  workflow_dispatch:   # run this manually, occasionally — not on every post
+  schedule:
+    - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC — style doesn't shift fast enough to justify more frequent credit spend
+  workflow_dispatch:       # also runnable manually anytime
 
 jobs:
   update-examples:
