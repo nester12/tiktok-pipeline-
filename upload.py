@@ -88,6 +88,53 @@ mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) 
 """
 
 
+PENDING_QUEUE_FILE = "pending_queue.json"
+
+
+def load_pending_queue():
+    if os.path.exists(PENDING_QUEUE_FILE):
+        try:
+            with open(PENDING_QUEUE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def save_to_pending_queue(video_url, caption):
+    queue = load_pending_queue()
+    queue.append({"video_url": video_url, "caption": caption})
+    with open(PENDING_QUEUE_FILE, "w", encoding="utf-8") as f:
+        json.dump(queue, f, indent=2)
+    print(f"💾 Saved unposted video to backlog ({PENDING_QUEUE_FILE}) — will retry next run.")
+
+
+def post_to_buffer(video_url, caption, token, channel_id):
+    """Returns (success: bool, message: str)."""
+    resp = requests.post(
+        BUFFER_GRAPHQL_URL,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={
+            "query": CREATE_POST_MUTATION,
+            "variables": {"channelId": channel_id, "text": caption, "videoUrl": video_url},
+        },
+        timeout=60,
+    )
+    data = resp.json()
+    print(data)
+
+    result = data.get("data", {}).get("createPost", {})
+
+    if result.get("message"):
+        return False, result["message"]
+
+    post = result.get("post")
+    if post:
+        return True, f"post id {post['id']}, due {post.get('dueAt')}"
+
+    return False, f"Unexpected response from Buffer: {data}"
+
+
 def main():
     token = os.environ.get("BUFFER_ACCESS_TOKEN")
     channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
@@ -108,36 +155,14 @@ def main():
     caption = build_caption()
     print(f"   Caption: {caption}")
 
-    resp = requests.post(
-        BUFFER_GRAPHQL_URL,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "query": CREATE_POST_MUTATION,
-            "variables": {
-                "channelId": channel_id,
-                "text": caption,
-                "videoUrl": video_url,
-            },
-        },
-        timeout=60,
-    )
+    success, message = post_to_buffer(video_url, caption, token, channel_id)
 
-    data = resp.json()
-    print(data)
-
-    result = data.get("data", {}).get("createPost", {})
-
-    if result.get("message"):
-        raise RuntimeError(f"❌ Buffer rejected the post: {result['message']}")
-
-    post = result.get("post")
-    if post:
-        print(f"\n🎉 SUCCESS! Queued on Buffer — post id {post['id']}, due {post.get('dueAt')}")
+    if success:
+        print(f"\n🎉 SUCCESS! Queued on Buffer — {message}")
     else:
-        raise RuntimeError(f"❌ Unexpected response from Buffer: {data}")
+        print(f"❌ Buffer rejected the post: {message}")
+        save_to_pending_queue(video_url, caption)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
