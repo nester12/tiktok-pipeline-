@@ -7,6 +7,8 @@ on:
 jobs:
   generate-and-post:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -21,19 +23,36 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
+      - name: Retry any backlogged videos first
+        run: python retry_pending.py
+        env:
+          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
+
       - name: Generate and queue 4 videos (2 min apart)
         run: |
           for i in 1 2 3 4; do
             echo "=================================================="
             echo "🎬 Video $i of 4"
             echo "=================================================="
+
+            if ! python check_queue.py; then
+              echo "⏭️ Skipping video $i — Buffer queue is full. Remaining videos this run will also be skipped."
+              break
+            fi
+
             python fetch_background.py
             python generate_audio.py
             python render_video.py
             python upload_to_cloudinary.py
             export VIDEO_URL=$(cat video_url.txt)
             echo "📌 Using video URL: $VIDEO_URL"
-            python upload.py
+
+            if python upload.py; then
+              echo "✅ Video $i posted successfully."
+            else
+              echo "⚠️ Video $i failed to post (see error above) — continuing to next video instead of stopping the whole run."
+            fi
 
             if [ "$i" -lt 4 ]; then
               echo "⏳ Waiting 2 minutes before next video..."
@@ -49,3 +68,13 @@ jobs:
           BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
           BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Commit backlog changes (if any)
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          if [ -f pending_queue.json ]; then
+            git add pending_queue.json
+            git diff --staged --quiet || git commit -m "Update pending video backlog"
+            git push
+          fi
