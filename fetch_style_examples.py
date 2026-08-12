@@ -1,25 +1,54 @@
 # -------------------------------------------------------------------
-# Pulls real transcripts from example TikTok accounts via SocialCrawl,
-# to use as few-shot style examples for story generation.
-# Run this OCCASIONALLY (not every pipeline run) — it costs API
-# credits. Saves results to style_examples.json in the repo.
+# Pulls trending videos from SocialCrawl — both by hashtag search
+# (broad discovery, not limited to fixed accounts) and from a seed
+# list of reference accounts — extracts transcripts + engagement
+# metadata, then runs an AI analysis pass to surface patterns
+# (common hashtags, hook styles, what's actually performing well).
+#
+# Run this OCCASIONALLY (weekly via schedule, or manually) — it
+# costs SocialCrawl API credits. Not meant to run on every post.
 # -------------------------------------------------------------------
 import os
 import json
 import requests
 
-TARGET_HANDLES = ["aethryn", "textplan", "best_texting"]
-VIDEOS_PER_HANDLE = 3
-OUTPUT_FILE = "style_examples.json"
-
 BASE_URL = "https://www.socialcrawl.dev/v1"
+
+# Broad discovery via hashtags, not limited to 3 fixed accounts
+HASHTAGS_TO_SEARCH = [
+    "storytime", "redditstories", "storytelling",
+    "confession", "aitastories", "fyp",
+]
+VIDEOS_PER_HASHTAG = 12
+
+# Still keep a seed list of known-good accounts as a secondary source
+SEED_HANDLES = ["aethryn", "textplan", "best_texting"]
+VIDEOS_PER_HANDLE = 8
+
+STYLE_EXAMPLES_FILE = "style_examples.json"
+TRENDING_HASHTAGS_FILE = "trending_hashtags.json"
+STYLE_NOTES_FILE = "style_notes.txt"
 
 
 def get_headers(api_key):
     return {"x-api-key": api_key}
 
 
-def get_recent_videos(api_key, handle, limit):
+def get_hashtag_videos(api_key, hashtag, limit):
+    print(f"🔍 Searching hashtag #{hashtag}...")
+    resp = requests.get(
+        f"{BASE_URL}/tiktok/hashtag/videos",
+        headers=get_headers(api_key),
+        params={"hashtag": hashtag, "limit": limit},
+    )
+    if resp.status_code != 200:
+        print(f"⚠️ Hashtag search failed for #{hashtag}: {resp.status_code} {resp.text[:200]}")
+        return []
+    data = resp.json().get("data", {})
+    return data.get("items", [])
+
+
+def get_profile_videos(api_key, handle, limit):
     print(f"🔍 Fetching recent videos for @{handle}...")
     resp = requests.get(
         f"{BASE_URL}/tiktok/profile-videos",
@@ -27,7 +56,7 @@ def get_recent_videos(api_key, handle, limit):
         params={"handle": handle, "limit": limit},
     )
     if resp.status_code != 200:
-        print(f"⚠️ Could not fetch videos for @{handle}: {resp.status_code} {resp.text}")
+        print(f"⚠️ Could not fetch videos for @{handle}: {resp.status_code} {resp.text[:200]}")
         return []
     data = resp.json().get("data", {})
     return data.get("items", [])
@@ -40,44 +69,130 @@ def get_transcript(api_key, video_url):
         params={"url": video_url},
     )
     if resp.status_code != 200:
-        print(f"   ⚠️ No transcript for {video_url}: {resp.status_code}")
         return None
     data = resp.json().get("data", {})
     return data.get("transcript") or data.get("text")
 
 
+def extract_hashtags(caption):
+    if not caption:
+        return []
+    return [w.strip("#").lower() for w in caption.split() if w.startswith("#")]
+
+
+def collect_videos(api_key):
+    """Gathers video candidates from both hashtag search and seed accounts, deduped by URL."""
+    seen_urls = set()
+    candidates = []
+
+    for tag in HASHTAGS_TO_SEARCH:
+        for video in get_hashtag_videos(api_key, tag, VIDEOS_PER_HASHTAG):
+            url = video.get("url") or video.get("video_url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                video["_source"] = f"#{tag}"
+                candidates.append(video)
+
+    for handle in SEED_HANDLES:
+        for video in get_profile_videos(api_key, handle, VIDEOS_PER_HANDLE):
+            url = video.get("url") or video.get("video_url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                video["_source"] = f"@{handle}"
+                candidates.append(video)
+
+    return candidates
+
+
+def analyze_patterns(examples, groq_key):
+    """Asks an LLM to summarize what's working across the collected examples."""
+    if not groq_key or not examples:
+        return ""
+
+    sample_text = "\n\n---\n\n".join(
+        f"Source: {ex['source']}\nViews: {ex.get('views', 'unknown')}\n"
+        f"Transcript: {ex['transcript'][:500]}"
+        for ex in examples[:15]
+    )
+
+    prompt = (
+        "Here are transcripts from currently trending 'reddit story' style TikTok videos, "
+        "with view counts where available:\n\n"
+        f"{sample_text}\n\n"
+        "Analyze these and write a short set of concrete notes (bullet points, under 150 words) "
+        "on patterns that show up across the higher-performing ones: hook styles, story structure, "
+        "pacing, common themes, and anything notable. Be specific and actionable, not generic."
+    )
+
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.5,
+                "max_tokens": 300,
+            },
+        )
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"⚠️ Pattern analysis failed: {e}")
+
+    return ""
+
+
 def main():
     api_key = os.environ.get("SOCIALCRAWL_API_KEY")
+    groq_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise ValueError("❌ 'SOCIALCRAWL_API_KEY' missing from environment!")
 
-    examples = []
+    candidates = collect_videos(api_key)
+    print(f"\n📦 Collected {len(candidates)} unique candidate videos, fetching transcripts...")
 
-    for handle in TARGET_HANDLES:
-        videos = get_recent_videos(api_key, handle, VIDEOS_PER_HANDLE)
-        for video in videos:
-            video_url = video.get("url") or video.get("video_url")
-            if not video_url:
-                continue
-            print(f"   📝 Getting transcript for {video_url}...")
-            transcript = get_transcript(api_key, video_url)
-            if transcript and len(transcript.split()) > 20:
-                examples.append({
-                    "handle": handle,
-                    "caption": video.get("caption", ""),
-                    "transcript": transcript.strip(),
-                })
+    examples = []
+    hashtag_counter = {}
+
+    for video in candidates:
+        url = video.get("url") or video.get("video_url")
+        caption = video.get("caption", "")
+        views = video.get("views") or video.get("view_count")
+
+        for tag in extract_hashtags(caption):
+            hashtag_counter[tag] = hashtag_counter.get(tag, 0) + 1
+
+        transcript = get_transcript(api_key, url)
+        if transcript and len(transcript.split()) > 20:
+            examples.append({
+                "source": video["_source"],
+                "caption": caption,
+                "views": views,
+                "transcript": transcript.strip(),
+            })
 
     if not examples:
-        print("⚠️ No usable transcripts were collected. Keeping existing style_examples.json (if any) unchanged.")
+        print("⚠️ No usable transcripts collected this run. Leaving existing files unchanged.")
         return
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(examples, f, indent=2)
+    # Sort by views (highest first) where we have that data, unknowns last
+    examples.sort(key=lambda e: (e["views"] is None, -(e["views"] or 0)))
 
-    print(f"\n✅ Saved {len(examples)} style examples to '{OUTPUT_FILE}'")
-    for ex in examples:
-        print(f"   - @{ex['handle']}: {ex['transcript'][:80]}...")
+    with open(STYLE_EXAMPLES_FILE, "w", encoding="utf-8") as f:
+        json.dump(examples, f, indent=2)
+    print(f"✅ Saved {len(examples)} style examples to '{STYLE_EXAMPLES_FILE}'")
+
+    top_hashtags = sorted(hashtag_counter.items(), key=lambda x: -x[1])[:15]
+    with open(TRENDING_HASHTAGS_FILE, "w", encoding="utf-8") as f:
+        json.dump([tag for tag, _ in top_hashtags], f, indent=2)
+    print(f"✅ Saved top hashtags to '{TRENDING_HASHTAGS_FILE}': {[t for t,_ in top_hashtags]}")
+
+    notes = analyze_patterns(examples, groq_key)
+    if notes:
+        with open(STYLE_NOTES_FILE, "w", encoding="utf-8") as f:
+            f.write(notes)
+        print(f"✅ Saved AI pattern analysis to '{STYLE_NOTES_FILE}':\n{notes}")
 
 
 if __name__ == "__main__":
