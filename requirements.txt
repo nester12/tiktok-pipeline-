@@ -1,6 +1,6 @@
 requests
 google-generativeai
-edge-tts
+chatterbox-tts
 openai-whisper
 moviepy==1.0.3
 pillow==9.5.0
