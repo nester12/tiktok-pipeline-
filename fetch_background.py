@@ -35,6 +35,47 @@ def download_source_video(file_id):
     )
 
 
+def is_valid_video(path):
+    """Uses ffprobe to check the file is a genuinely readable video,
+    not a corrupted/incomplete download."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30
+        )
+        duration = float(result.stdout.strip())
+        return duration > 0
+    except Exception:
+        return False
+
+
+def download_valid_source():
+    """Tries each source video (in random order) until one downloads
+    and validates successfully, retrying a flaky download once before
+    moving on to the next candidate."""
+    candidates = SOURCE_FILE_IDS.copy()
+    random.shuffle(candidates)
+
+    for file_id in candidates:
+        for attempt in range(1, 3):  # up to 2 tries per file
+            try:
+                if os.path.exists(SOURCE_FILE):
+                    os.remove(SOURCE_FILE)
+                download_source_video(file_id)
+                if is_valid_video(SOURCE_FILE):
+                    print(f"✅ Valid download confirmed (file id: {file_id})")
+                    return
+                else:
+                    print(f"⚠️ Downloaded file failed validation (attempt {attempt}/2) — retrying...")
+            except Exception as e:
+                print(f"⚠️ Download failed (attempt {attempt}/2): {e}")
+
+        print(f"🔁 Giving up on file id {file_id} after 2 attempts, trying a different source video...")
+
+    raise RuntimeError("❌ None of the source videos could be downloaded successfully.")
+
+
 def score_motion(video_path, start, duration):
     """Scores a segment by average frame-to-frame pixel difference —
     higher score = more visual motion/change happening."""
@@ -96,8 +137,7 @@ def find_best_segment(video_path, total_duration, segment_duration):
 
 
 def main():
-    file_id = random.choice(SOURCE_FILE_IDS)
-    download_source_video(file_id)
+    download_valid_source()
 
     clip = VideoFileClip(SOURCE_FILE)
     total_duration = clip.duration
