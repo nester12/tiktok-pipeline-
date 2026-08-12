@@ -1,32 +1,59 @@
 # -------------------------------------------------------------------
-# Generate TTS Voiceover & Word Timestamps
-# Includes an automatic retry loop that regenerates the story with
-# an adjusted length until the final audio lands between 60-120s.
+# Generate TTS Voiceover (Chatterbox, MIT-licensed, commercial-safe)
+# & Word Timestamps. Includes an automatic retry loop that
+# regenerates the story with an adjusted length until the final
+# audio lands between 60-120s.
 # -------------------------------------------------------------------
 import os
 import json
-import asyncio
 import whisper
-import edge_tts
+import torchaudio as ta
+from chatterbox.tts import ChatterboxTTS
 from moviepy.editor import AudioFileClip
 
 from generate_story import generate_story, STORY_NICHES
 import random
 
 STORY_FILE = "story.txt"
-AUDIO_FILE = "narration.mp3"
+AUDIO_FILE = "narration.wav"
 JSON_FILE = "timestamps.json"
-VOICE = "en-US-AndrewNeural"  # warmer, more expressive narrator-style voice
-RATE = "+15%"
+
+# Optional: path to a reference voice clip for cloning (6-10s of clean audio).
+# Leave unset to use Chatterbox's default voice.
+VOICE_REFERENCE_PATH = os.environ.get("VOICE_REFERENCE_PATH")
+
+# Emotion intensity — Chatterbox's expressive-narration dial (0.0-1.0+)
+EXAGGERATION = 0.6
+CFG_WEIGHT = 0.4
 
 MIN_DURATION = 60
 MAX_DURATION = 120
 MAX_ATTEMPTS = 4
 
+_model = None  # loaded once, reused across retry attempts in the same run
 
-async def synthesize(story_text):
-    communicate = edge_tts.Communicate(story_text, VOICE, rate=RATE)
-    await communicate.save(AUDIO_FILE)
+
+def get_model():
+    global _model
+    if _model is None:
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            from huggingface_hub import login
+            login(token=hf_token)
+
+        print("📦 Loading Chatterbox TTS model (CPU)...")
+        _model = ChatterboxTTS.from_pretrained(device="cpu")
+    return _model
+
+
+def synthesize(story_text):
+    model = get_model()
+    kwargs = {"exaggeration": EXAGGERATION, "cfg_weight": CFG_WEIGHT}
+    if VOICE_REFERENCE_PATH and os.path.exists(VOICE_REFERENCE_PATH):
+        kwargs["audio_prompt_path"] = VOICE_REFERENCE_PATH
+
+    wav = model.generate(story_text, **kwargs)
+    ta.save(AUDIO_FILE, wav, model.sr)
 
 
 def get_audio_duration():
@@ -38,7 +65,7 @@ def get_audio_duration():
 
 def main():
     niche = random.choice(STORY_NICHES)
-    word_target = 240  # initial guess, ~85s at +15% rate
+    word_target = 240  # initial guess for ~85s
     story_text = None
     duration = None
 
@@ -49,8 +76,8 @@ def main():
         with open(STORY_FILE, "w", encoding="utf-8") as f:
             f.write(story_text)
 
-        print(f"🎙️ Generating voiceover audio with voice '{VOICE}' at rate {RATE}...")
-        asyncio.run(synthesize(story_text))
+        print("🎙️ Generating voiceover with Chatterbox TTS...")
+        synthesize(story_text)
 
         duration = get_audio_duration()
         print(f"⏱️ Resulting audio duration: {duration:.1f}s")
@@ -59,7 +86,6 @@ def main():
             print("✅ Duration within 60-120s target — proceeding.")
             break
 
-        # Adjust word target proportionally toward the 90s midpoint and retry
         scale = 90 / max(duration, 1)
         word_target = max(80, min(500, int(word_target * scale)))
         print(f"⚠️ Duration out of range. Adjusting target to {word_target} words and retrying...")
