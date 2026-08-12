@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip
 
 BACKGROUND_VIDEO = "background.mp4"
-NARRATION_AUDIO = "narration.mp3"
+NARRATION_AUDIO = "narration.wav"
 TIMESTAMPS_JSON = "timestamps.json"
 OUTPUT_VIDEO = "final_short.mp4"
 
