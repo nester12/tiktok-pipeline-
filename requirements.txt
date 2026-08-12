@@ -6,3 +6,4 @@ moviepy==1.0.3
 pillow==9.5.0
 numpy
 gdown
+opencv-python-headless
