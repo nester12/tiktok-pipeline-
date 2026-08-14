@@ -135,6 +135,22 @@ def post_to_buffer(video_url, caption, token, channel_id):
     return False, f"Unexpected response from Buffer: {data}"
 
 
+QUEUE_LOG_FILE = "queue_log.json"
+
+
+def log_queued_post(video_url, due_at):
+    log = []
+    if os.path.exists(QUEUE_LOG_FILE):
+        try:
+            with open(QUEUE_LOG_FILE, "r", encoding="utf-8") as f:
+                log = json.load(f)
+        except Exception:
+            log = []
+    log.append({"video_url": video_url, "due_at": due_at})
+    with open(QUEUE_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(log, f, indent=2)
+
+
 def main():
     token = os.environ.get("BUFFER_ACCESS_TOKEN")
     channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
@@ -159,6 +175,11 @@ def main():
 
     if success:
         print(f"\n🎉 SUCCESS! Queued on Buffer — {message}")
+        # Extract dueAt from the message for our local ledger
+        due_at = None
+        if "due " in message:
+            due_at = message.split("due ", 1)[1].strip()
+        log_queued_post(video_url, due_at)
     else:
         print(f"❌ Buffer rejected the post: {message}")
         save_to_pending_queue(video_url, caption)
