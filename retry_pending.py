@@ -1,46 +1,66 @@
 # -------------------------------------------------------------------
-# Retries any videos left over in the backlog from a previous run
-# (e.g. Buffer's queue was full). Runs BEFORE generating anything
-# new, so unposted videos get first priority once there's room.
+# Checks how many of our own recently-queued posts are still likely
+# pending on Buffer, using a LOCAL ledger (queue_log.json) rather
+# than querying Buffer directly — we don't have a confirmed API for
+# listing pending posts, but we do reliably get a dueAt timestamp
+# back every time we successfully queue one, so we track that
+# ourselves instead.
+#
+# A post counts as "still in the queue" if its due_at time hasn't
+# passed yet. Once due_at is in the past, we assume Buffer has
+# posted it and it's no longer taking up a queue slot.
 # -------------------------------------------------------------------
 import os
 import sys
-from upload import load_pending_queue, save_to_pending_queue, post_to_buffer, PENDING_QUEUE_FILE
 import json
+from datetime import datetime, timezone
+
+QUEUE_LOG_FILE = "queue_log.json"
+QUEUE_LIMIT = 10  # Buffer free plan cap per channel
+
+
+def parse_due_at(due_at_str):
+    if not due_at_str:
+        return None
+    try:
+        # Handle common ISO formats, with or without 'Z'
+        cleaned = due_at_str.replace("Z", "+00:00")
+        return datetime.fromisoformat(cleaned)
+    except Exception:
+        return None
 
 
 def main():
-    token = os.environ.get("BUFFER_ACCESS_TOKEN")
-    channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
-
-    if not token or not channel_id:
-        print("⚠️ Missing Buffer credentials — skipping backlog retry.")
+    if not os.path.exists(QUEUE_LOG_FILE):
+        print("📊 No queue log yet — assuming queue has room.")
         return
 
-    queue = load_pending_queue()
-    if not queue:
-        print("📭 No pending videos in backlog.")
+    try:
+        with open(QUEUE_LOG_FILE, "r", encoding="utf-8") as f:
+            log = json.load(f)
+    except Exception:
+        print("⚠️ Could not read queue log — assuming queue has room.")
         return
 
-    print(f"📬 Found {len(queue)} video(s) in backlog — retrying...")
+    now = datetime.now(timezone.utc)
     still_pending = []
 
-    for item in queue:
-        success, message = post_to_buffer(item["video_url"], item["caption"], token, channel_id)
-        if success:
-            print(f"✅ Backlog video posted — {message}")
-        else:
-            print(f"❌ Still couldn't post ({message}) — keeping in backlog.")
-            still_pending.append(item)
-            if "limit reached" in message.lower() or "queue" in message.lower():
-                # Queue's still full — no point trying the rest right now
-                still_pending.extend(queue[queue.index(item) + 1:])
-                break
+    for entry in log:
+        due_at = parse_due_at(entry.get("due_at"))
+        if due_at is None or due_at > now:
+            # Unknown due date, or still in the future — count as pending
+            still_pending.append(entry)
 
-    with open(PENDING_QUEUE_FILE, "w", encoding="utf-8") as f:
+    # Prune the log file to just what's still relevant, so it doesn't grow forever
+    with open(QUEUE_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(still_pending, f, indent=2)
 
-    print(f"\n📊 Backlog result: {len(queue) - len(still_pending)} posted, {len(still_pending)} still pending.")
+    count = len(still_pending)
+    print(f"📊 Estimated queued posts still pending: {count}/{QUEUE_LIMIT}")
+
+    if count >= QUEUE_LIMIT:
+        print("🛑 Queue is likely full — skipping generation for this run to avoid wasted work.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
