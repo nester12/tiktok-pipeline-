@@ -6,6 +6,7 @@
 # -------------------------------------------------------------------
 import os
 import json
+import subprocess
 import whisper
 import torchaudio as ta
 from chatterbox.tts import ChatterboxTTS
@@ -15,6 +16,7 @@ from generate_story import generate_story, STORY_NICHES
 import random
 
 STORY_FILE = "story.txt"
+RAW_AUDIO_FILE = "narration_raw.wav"
 AUDIO_FILE = "narration.wav"
 JSON_FILE = "timestamps.json"
 
@@ -25,6 +27,10 @@ VOICE_REFERENCE_PATH = os.environ.get("VOICE_REFERENCE_PATH")
 # Emotion intensity — Chatterbox's expressive-narration dial (0.0-1.0+)
 EXAGGERATION = 0.6
 CFG_WEIGHT = 0.4
+
+# Playback speed multiplier, applied after generation via ffmpeg's
+# pitch-preserving time-stretch (Chatterbox has no native rate control)
+SPEED_FACTOR = 1.15
 
 MIN_DURATION = 60
 MAX_DURATION = 120
@@ -46,6 +52,15 @@ def get_model():
     return _model
 
 
+def speed_up_audio(input_path, output_path, factor):
+    """Speeds up audio while preserving pitch, using ffmpeg's atempo filter.
+    atempo only accepts 0.5-2.0 per instance, which covers our use case fine."""
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", input_path, "-filter:a", f"atempo={factor}", output_path],
+        check=True, capture_output=True
+    )
+
+
 def synthesize(story_text):
     model = get_model()
     kwargs = {"exaggeration": EXAGGERATION, "cfg_weight": CFG_WEIGHT}
@@ -53,7 +68,10 @@ def synthesize(story_text):
         kwargs["audio_prompt_path"] = VOICE_REFERENCE_PATH
 
     wav = model.generate(story_text, **kwargs)
-    ta.save(AUDIO_FILE, wav, model.sr)
+    ta.save(RAW_AUDIO_FILE, wav, model.sr)
+
+    print(f"⏩ Speeding up audio {SPEED_FACTOR}x (pitch-preserving)...")
+    speed_up_audio(RAW_AUDIO_FILE, AUDIO_FILE, SPEED_FACTOR)
 
 
 def get_audio_duration():
@@ -65,7 +83,7 @@ def get_audio_duration():
 
 def main():
     niche = random.choice(STORY_NICHES)
-    word_target = 240  # initial guess for ~85s
+    word_target = 205  # initial guess for ~85s at 1.15x playback speed
     story_text = None
     duration = None
 
