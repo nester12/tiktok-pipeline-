@@ -32,9 +32,6 @@ jobs:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
           ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
 
-      - name: Check posting safety limit
-        run: python check_queue.py
-
       - name: Fetch background video
         run: python fetch_background.py
 
