@@ -1,13 +1,14 @@
 # -------------------------------------------------------------------
-# Post to TikTok via Buffer's GraphQL API
+# Post to TikTok via Zernio's unified posting API
 # -------------------------------------------------------------------
 import os
 import sys
 import json
 import random
 import requests
+from datetime import datetime, timezone, timedelta
 
-BUFFER_GRAPHQL_URL = "https://api.buffer.com"
+ZERNIO_URL = "https://zernio.com/api/v1/posts"
 STORY_FILE = "story.txt"
 TRENDING_HASHTAGS_FILE = "trending_hashtags.json"
 
@@ -15,16 +16,18 @@ ATTRIBUTION = "Background footage by GameplaysForFree, licensed under CC BY 4.0"
 DEFAULT_HASHTAGS = ["storytime", "redditstories", "fyp"]
 NUM_HASHTAGS_TO_USE = 5
 
-
 MAX_CAPTION_LENGTH = 2200
 MAX_HOOK_WORDS = 18
+
+PENDING_QUEUE_FILE = "pending_queue.json"
+QUEUE_LOG_FILE = "queue_log.json"
 
 
 def build_hashtags():
     """Uses currently trending hashtags (from fetch_style_examples.py) if
     available, mixed with a couple of reliable defaults, otherwise falls
     back to the default set entirely."""
-    tags = list(DEFAULT_HASHTAGS)  # always include these as a safe baseline
+    tags = list(DEFAULT_HASHTAGS)
 
     if os.path.exists(TRENDING_HASHTAGS_FILE):
         try:
@@ -61,35 +64,6 @@ def build_caption():
 
     return caption
 
-CREATE_POST_MUTATION = """
-mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) {
-  createPost(
-    input: {
-      text: $text
-      channelId: $channelId
-      schedulingType: automatic
-      mode: addToQueue
-      assets: [
-        { video: { url: $videoUrl } }
-      ]
-    }
-  ) {
-    ... on PostActionSuccess {
-      post {
-        id
-        dueAt
-      }
-    }
-    ... on MutationError {
-      message
-    }
-  }
-}
-"""
-
-
-PENDING_QUEUE_FILE = "pending_queue.json"
-
 
 def load_pending_queue():
     if os.path.exists(PENDING_QUEUE_FILE):
@@ -109,35 +83,6 @@ def save_to_pending_queue(video_url, caption):
     print(f"💾 Saved unposted video to backlog ({PENDING_QUEUE_FILE}) — will retry next run.")
 
 
-def post_to_buffer(video_url, caption, token, channel_id):
-    """Returns (success: bool, message: str)."""
-    resp = requests.post(
-        BUFFER_GRAPHQL_URL,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={
-            "query": CREATE_POST_MUTATION,
-            "variables": {"channelId": channel_id, "text": caption, "videoUrl": video_url},
-        },
-        timeout=60,
-    )
-    data = resp.json()
-    print(data)
-
-    result = data.get("data", {}).get("createPost", {})
-
-    if result.get("message"):
-        return False, result["message"]
-
-    post = result.get("post")
-    if post:
-        return True, f"post id {post['id']}, due {post.get('dueAt')}"
-
-    return False, f"Unexpected response from Buffer: {data}"
-
-
-QUEUE_LOG_FILE = "queue_log.json"
-
-
 def log_queued_post(video_url, due_at):
     log = []
     if os.path.exists(QUEUE_LOG_FILE):
@@ -151,37 +96,68 @@ def log_queued_post(video_url, due_at):
         json.dump(log, f, indent=2)
 
 
+def post_to_zernio(video_url, caption, api_key, account_id, scheduled_for=None):
+    """Returns (success: bool, message: str)."""
+    payload = {
+        "platforms": [{"platform": "tiktok", "accountId": account_id}],
+        "content": caption,
+        "mediaItems": [{"type": "video", "url": video_url}],
+    }
+    if scheduled_for:
+        payload["scheduledFor"] = scheduled_for
+
+    resp = requests.post(
+        ZERNIO_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=60,
+    )
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw": resp.text}
+
+    print(data)
+
+    if resp.status_code in (200, 201):
+        post_id = data.get("id") or data.get("postId") or "unknown-id"
+        due = data.get("scheduledFor") or scheduled_for or "immediately"
+        return True, f"post id {post_id}, due {due}"
+
+    error_msg = data.get("error") or data.get("message") or f"HTTP {resp.status_code}: {data}"
+    return False, str(error_msg)
+
+
 def main():
-    token = os.environ.get("BUFFER_ACCESS_TOKEN")
-    channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
+    api_key = os.environ.get("ZERNIO_API_KEY")
+    account_id = os.environ.get("ZERNIO_TIKTOK_ACCOUNT_ID")
     video_url = os.environ.get("VIDEO_URL")
 
     missing = [name for name, val in [
-        ("BUFFER_ACCESS_TOKEN", token),
-        ("BUFFER_TIKTOK_CHANNEL_ID", channel_id),
+        ("ZERNIO_API_KEY", api_key),
+        ("ZERNIO_TIKTOK_ACCOUNT_ID", account_id),
         ("VIDEO_URL", video_url),
     ] if not val]
 
     if missing:
         raise ValueError(f"❌ Missing required environment variable(s): {', '.join(missing)}")
 
-    print(f"📤 Posting to TikTok via Buffer...")
+    print(f"📤 Posting to TikTok via Zernio...")
     print(f"   Video URL: {video_url}")
 
     caption = build_caption()
     print(f"   Caption: {caption}")
 
-    success, message = post_to_buffer(video_url, caption, token, channel_id)
+    # Post immediately (no scheduling needed — we control timing via our own 4x/day trigger)
+    success, message = post_to_zernio(video_url, caption, api_key, account_id)
 
     if success:
-        print(f"\n🎉 SUCCESS! Queued on Buffer — {message}")
-        # Extract dueAt from the message for our local ledger
-        due_at = None
-        if "due " in message:
-            due_at = message.split("due ", 1)[1].strip()
+        print(f"\n🎉 SUCCESS! Posted via Zernio — {message}")
+        due_at = message.split("due ", 1)[1].strip() if "due " in message else None
         log_queued_post(video_url, due_at)
     else:
-        print(f"❌ Buffer rejected the post: {message}")
+        print(f"❌ Zernio rejected the post: {message}")
         save_to_pending_queue(video_url, caption)
         sys.exit(1)
 
