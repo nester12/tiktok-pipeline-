@@ -25,6 +25,11 @@ VIDEOS_PER_HASHTAG = 12
 SEED_HANDLES = ["aethryn", "textplan", "best_texting"]
 VIDEOS_PER_HANDLE = 8
 
+# Your own account — tracked separately so we can see what's actually
+# working on your channel specifically, not just external inspiration
+OWN_HANDLE = "only1_short_story"
+VIDEOS_FROM_OWN_ACCOUNT = 20  # pull as many as exist; harmless if fewer are available
+
 STYLE_EXAMPLES_FILE = "style_examples.json"
 TRENDING_HASHTAGS_FILE = "trending_hashtags.json"
 STYLE_NOTES_FILE = "style_notes.txt"
@@ -101,27 +106,51 @@ def collect_videos(api_key):
                 video["_source"] = f"@{handle}"
                 candidates.append(video)
 
+    # Own account — tagged distinctly so it's clear this is real
+    # performance data from your own posted videos, not inspiration
+    for video in get_profile_videos(api_key, OWN_HANDLE, VIDEOS_FROM_OWN_ACCOUNT):
+        url = video.get("url") or video.get("video_url")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            video["_source"] = f"@{OWN_HANDLE} (own account)"
+            candidates.append(video)
+
     return candidates
 
 
 def analyze_patterns(examples, groq_key):
-    """Asks an LLM to summarize what's working across the collected examples."""
+    """Asks an LLM to summarize what's working across the collected examples,
+    with special attention to how the account's own videos compare to
+    external trending examples."""
     if not groq_key or not examples:
         return ""
+
+    own_examples = [ex for ex in examples if "own account" in ex["source"]]
+    other_examples = [ex for ex in examples if "own account" not in ex["source"]]
 
     sample_text = "\n\n---\n\n".join(
         f"Source: {ex['source']}\nViews: {ex.get('views', 'unknown')}\n"
         f"Transcript: {ex['transcript'][:500]}"
-        for ex in examples[:15]
+        for ex in other_examples[:12]
     )
 
+    own_text = "\n\n---\n\n".join(
+        f"Views: {ex.get('views', 'unknown')}\nTranscript: {ex['transcript'][:500]}"
+        for ex in own_examples[:8]
+    ) or "(no videos from your own account collected this run)"
+
     prompt = (
-        "Here are transcripts from currently trending 'reddit story' style TikTok videos, "
-        "with view counts where available:\n\n"
+        "Here are transcripts from currently trending 'reddit story' style TikTok videos "
+        "from OTHER accounts, with view counts where available:\n\n"
         f"{sample_text}\n\n"
-        "Analyze these and write a short set of concrete notes (bullet points, under 150 words) "
-        "on patterns that show up across the higher-performing ones: hook styles, story structure, "
-        "pacing, common themes, and anything notable. Be specific and actionable, not generic."
+        "Here are transcripts from MY OWN TikTok account's videos, with their actual "
+        "view counts:\n\n"
+        f"{own_text}\n\n"
+        "Analyze both sets and write a short set of concrete notes (bullet points, under "
+        "180 words) covering: (1) patterns in what's performing well externally — hook "
+        "styles, structure, pacing; (2) how my own videos compare — are they matching "
+        "those patterns or missing something; (3) one or two specific things to try "
+        "differently next. Be specific and actionable, not generic."
     )
 
     try:
@@ -132,7 +161,7 @@ def analyze_patterns(examples, groq_key):
                 "model": "llama-3.3-70b-versatile",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.5,
-                "max_tokens": 300,
+                "max_tokens": 400,
             },
         )
         if resp.status_code == 200:
