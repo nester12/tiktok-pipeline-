@@ -140,10 +140,10 @@ def generate_with_gemini(gemini_key, prompt):
     return model.generate_content(prompt).text.strip()
 
 
-def generate_with_nvidia(nvidia_key, prompt):
+def generate_with_nvidia(META1_API_KEY, prompt):
     print("🟩 Generating story using NVIDIA NIM (DeepSeek V4)...")
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {META1_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "deepseek-ai/deepseek-v4",
         "messages": [
@@ -186,7 +186,7 @@ def generate_story(word_target=240, niche=None):
 
     if not story_text and nvidia_key:
         try:
-            story_text = generate_with_nvidia(nvidia_key, prompt)
+            story_text = generate_with_nvidia(META1_API_KEY, prompt)
         except Exception as e:
             print(f"⚠️ NVIDIA NIM generation failed: {e}")
 
