@@ -113,39 +113,12 @@ def build_prompt(niche, word_target):
     )
 
 
-def generate_with_groq(groq_key, prompt):
-    print("⚡ Generating story using Groq API (Llama 3.3)...")
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "system", "content": "You are a master storyteller writing viral, relatable TikTok Reddit scripts."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.9,
-        "max_tokens": 700
-    }
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"].strip()
-    raise Exception(f"Groq API Error ({response.status_code}): {response.text}")
-
-
-def generate_with_gemini(gemini_key, prompt):
-    print("🤖 Generating story using Gemini API...")
-    import google.generativeai as genai
-    genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    return model.generate_content(prompt).text.strip()
-
-
-def generate_with_nvidia(META1_API_KEY, prompt):
-    print("🟩 Generating story using NVIDIA NIM (DeepSeek V4)...")
+def generate_with_nvidia_model(nvidia_key, prompt, model_id, label):
+    print(f"🟩 Generating story using NVIDIA NIM ({label})...")
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {META1_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
     payload = {
-        "model": "deepseek-ai/deepseek-v4",
+        "model": model_id,
         "messages": [
             {"role": "system", "content": "You are a master storyteller writing viral, relatable TikTok Reddit scripts."},
             {"role": "user", "content": prompt}
@@ -161,37 +134,36 @@ def generate_with_nvidia(META1_API_KEY, prompt):
 
 def generate_story(word_target=240, niche=None):
     """Generates a story of roughly word_target words. Returns the story text.
-    Tries Groq first, then Gemini, then NVIDIA NIM (DeepSeek V4) as a fallback."""
-    groq_key = os.environ.get("GROQ_API_KEY")
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    nvidia_key = os.environ.get("NVIDIA_API_KEY")
+    Tries Llama 4 Maverick first (best fit for narrative prose), then
+    GLM-5.2 as a fallback, both via NVIDIA NIM."""
+    nvidia_key = os.environ.get("META1_API_KEY") or os.environ.get("NVIDIA_API_KEY")
 
     if niche is None:
         niche = random.choice(STORY_NICHES)
     prompt = build_prompt(niche, word_target)
     print(f"🎯 Niche: {niche} | Target words: {word_target}")
 
+    if not nvidia_key:
+        raise ValueError("❌ Neither 'META1_API_KEY' nor 'NVIDIA_API_KEY' found in environment!")
+
     story_text = ""
-    if groq_key:
-        try:
-            story_text = generate_with_groq(groq_key, prompt)
-        except Exception as e:
-            print(f"⚠️ Groq generation failed: {e}")
-
-    if not story_text and gemini_key:
-        try:
-            story_text = generate_with_gemini(gemini_key, prompt)
-        except Exception as e:
-            print(f"⚠️ Gemini generation failed: {e}")
-
-    if not story_text and nvidia_key:
-        try:
-            story_text = generate_with_nvidia(META1_API_KEY, prompt)
-        except Exception as e:
-            print(f"⚠️ NVIDIA NIM generation failed: {e}")
+    try:
+        story_text = generate_with_nvidia_model(
+            nvidia_key, prompt, "meta/llama-3.1-70b-instruct", "Llama 3.1 70B Instruct"
+        )
+    except Exception as e:
+        print(f"⚠️ Llama 3.1 70B generation failed: {e}")
 
     if not story_text:
-        raise ValueError("❌ None of GROQ_API_KEY, GEMINI_API_KEY, or NVIDIA_API_KEY produced a story!")
+        try:
+            story_text = generate_with_nvidia_model(
+                nvidia_key, prompt, "z-ai/glm-5.2", "GLM-5.2"
+            )
+        except Exception as e:
+            print(f"⚠️ GLM-5.2 generation failed: {e}")
+
+    if not story_text:
+        raise ValueError("❌ Both Llama 3.1 70B and GLM-5.2 failed to produce a story!")
 
     return story_text
 
