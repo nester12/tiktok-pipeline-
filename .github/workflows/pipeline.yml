@@ -38,9 +38,8 @@ jobs:
       - name: Generate voiceover + timestamps (also generates the story internally)
         run: python generate_audio.py
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          META1_API_KEY: ${{ secrets.META1_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
       - name: Render video
