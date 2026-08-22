@@ -1,8 +1,15 @@
 # -------------------------------------------------------------------
 # Generate TTS Voiceover (Chatterbox, MIT-licensed, commercial-safe)
-# & Word Timestamps. Includes an automatic retry loop that
-# regenerates the story with an adjusted length until the final
-# audio lands between 60-120s.
+# & Word Timestamps.
+#
+# Instead of relying purely on the AI to hit a target word count
+# (unreliable — different models follow length instructions with
+# very different accuracy), playback speed is calculated DYNAMICALLY
+# based on how long the raw narration actually came out, so the
+# final duration lands near the target on the first attempt
+# regardless of word-count drift. A retry loop remains as a
+# fallback only for extreme cases the speed adjustment can't fix
+# without sounding unnatural.
 # -------------------------------------------------------------------
 import os
 import json
@@ -20,23 +27,23 @@ RAW_AUDIO_FILE = "narration_raw.wav"
 AUDIO_FILE = "narration.wav"
 JSON_FILE = "timestamps.json"
 
-# Optional: path to a reference voice clip for cloning (6-10s of clean audio).
-# Leave unset to use Chatterbox's default voice.
 VOICE_REFERENCE_PATH = os.environ.get("VOICE_REFERENCE_PATH")
 
-# Emotion intensity — Chatterbox's expressive-narration dial (0.0-1.0+)
 EXAGGERATION = 0.6
 CFG_WEIGHT = 0.4
 
-# Playback speed multiplier, applied after generation via ffmpeg's
-# pitch-preserving time-stretch (Chatterbox has no native rate control)
-SPEED_FACTOR = 1.15
-
+TARGET_DURATION = 90    # aim for the midpoint of the 60-120s window
 MIN_DURATION = 60
 MAX_DURATION = 120
+
+# Keep playback speed within a range that still sounds natural —
+# beyond this, we fall back to regenerating the story instead
+MIN_SPEED = 0.85
+MAX_SPEED = 1.35
+
 MAX_ATTEMPTS = 4
 
-_model = None  # loaded once, reused across retry attempts in the same run
+_model = None
 
 
 def get_model():
@@ -53,15 +60,24 @@ def get_model():
 
 
 def speed_up_audio(input_path, output_path, factor):
-    """Speeds up audio while preserving pitch, using ffmpeg's atempo filter.
-    atempo only accepts 0.5-2.0 per instance, which covers our use case fine."""
+    """Time-stretches audio while preserving pitch, using ffmpeg's atempo filter."""
     subprocess.run(
         ["ffmpeg", "-y", "-i", input_path, "-filter:a", f"atempo={factor}", output_path],
         check=True, capture_output=True
     )
 
 
-def synthesize(story_text):
+def get_duration(path):
+    clip = AudioFileClip(path)
+    duration = clip.duration
+    clip.close()
+    return duration
+
+
+def synthesize_with_dynamic_speed(story_text):
+    """Generates raw narration, then computes the exact speed needed to hit
+    TARGET_DURATION, clamped to a natural-sounding range. Returns the final
+    duration and the speed actually used."""
     model = get_model()
     kwargs = {"exaggeration": EXAGGERATION, "cfg_weight": CFG_WEIGHT}
     if VOICE_REFERENCE_PATH and os.path.exists(VOICE_REFERENCE_PATH):
@@ -70,20 +86,22 @@ def synthesize(story_text):
     wav = model.generate(story_text, **kwargs)
     ta.save(RAW_AUDIO_FILE, wav, model.sr)
 
-    print(f"⏩ Speeding up audio {SPEED_FACTOR}x (pitch-preserving)...")
-    speed_up_audio(RAW_AUDIO_FILE, AUDIO_FILE, SPEED_FACTOR)
+    raw_duration = get_duration(RAW_AUDIO_FILE)
+    needed_speed = raw_duration / TARGET_DURATION
+    clamped_speed = max(MIN_SPEED, min(MAX_SPEED, needed_speed))
 
+    print(f"📏 Raw narration: {raw_duration:.1f}s → needed speed {needed_speed:.2f}x, "
+          f"using {clamped_speed:.2f}x (clamped to {MIN_SPEED}-{MAX_SPEED})")
 
-def get_audio_duration():
-    clip = AudioFileClip(AUDIO_FILE)
-    duration = clip.duration
-    clip.close()
-    return duration
+    speed_up_audio(RAW_AUDIO_FILE, AUDIO_FILE, clamped_speed)
+    final_duration = get_duration(AUDIO_FILE)
+
+    return final_duration, clamped_speed, raw_duration
 
 
 def main():
     niche = random.choice(STORY_NICHES)
-    word_target = 205  # initial guess for ~85s at 1.15x playback speed
+    word_target = 205  # initial guess — matters less now, but still a reasonable starting point
     story_text = None
     duration = None
 
@@ -95,18 +113,19 @@ def main():
             f.write(story_text)
 
         print("🎙️ Generating voiceover with Chatterbox TTS...")
-        synthesize(story_text)
-
-        duration = get_audio_duration()
-        print(f"⏱️ Resulting audio duration: {duration:.1f}s")
+        duration, speed_used, raw_duration = synthesize_with_dynamic_speed(story_text)
+        print(f"⏱️ Final audio duration: {duration:.1f}s (speed {speed_used:.2f}x)")
 
         if MIN_DURATION <= duration <= MAX_DURATION:
             print("✅ Duration within 60-120s target — proceeding.")
             break
 
-        scale = 90 / max(duration, 1)
-        word_target = max(80, min(500, int(word_target * scale)))
-        print(f"⚠️ Duration out of range. Adjusting target to {word_target} words and retrying...")
+        # Speed clamp couldn't fully compensate — the raw text was too far
+        # off in length. Adjust the word target more aggressively and retry.
+        scale = TARGET_DURATION / max(raw_duration, 1)
+        word_target = max(80, min(600, int(word_target * scale)))
+        print(f"⚠️ Duration still out of range even after speed adjustment. "
+              f"Adjusting target to {word_target} words and retrying...")
     else:
         print(f"⚠️ Reached max attempts — proceeding with last result ({duration:.1f}s), outside ideal range.")
 
