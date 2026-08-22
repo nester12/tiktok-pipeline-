@@ -33,6 +33,7 @@ VIDEOS_FROM_OWN_ACCOUNT = 20  # pull as many as exist; harmless if fewer are ava
 STYLE_EXAMPLES_FILE = "style_examples.json"
 TRENDING_HASHTAGS_FILE = "trending_hashtags.json"
 STYLE_NOTES_FILE = "style_notes.txt"
+TARGET_PACE_FILE = "target_pace.json"
 
 
 def get_headers(api_key):
@@ -118,11 +119,13 @@ def collect_videos(api_key):
     return candidates
 
 
-def analyze_patterns(examples, groq_key):
-    """Asks an LLM to summarize what's working across the collected examples,
-    with special attention to how the account's own videos compare to
-    external trending examples."""
-    if not groq_key or not examples:
+def analyze_patterns(examples, nvidia_key):
+    """Asks GLM-5.2 (via NVIDIA NIM) to summarize what's working across the
+    collected examples, with special attention to how the account's own
+    videos compare to external trending examples. GLM-5.2 is well suited
+    to this — it's a structured reasoning/extraction task, not creative
+    writing, which is where GLM-5.2 is actually strong."""
+    if not nvidia_key or not examples:
         return ""
 
     own_examples = [ex for ex in examples if "own account" in ex["source"]]
@@ -155,10 +158,10 @@ def analyze_patterns(examples, groq_key):
 
     try:
         resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": "z-ai/glm-5.2",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.5,
                 "max_tokens": 400,
@@ -174,7 +177,7 @@ def analyze_patterns(examples, groq_key):
 
 def main():
     api_key = os.environ.get("SOCIALCRAWL_API_KEY")
-    groq_key = os.environ.get("GROQ_API_KEY")
+    nvidia_key = os.environ.get("NVIDIA_API_KEY")
     if not api_key:
         raise ValueError("❌ 'SOCIALCRAWL_API_KEY' missing from environment!")
 
@@ -183,23 +186,34 @@ def main():
 
     examples = []
     hashtag_counter = {}
+    wpm_samples = []
 
     for video in candidates:
         url = video.get("url") or video.get("video_url")
         caption = video.get("caption", "")
         views = video.get("views") or video.get("view_count")
+        video_duration = video.get("duration") or video.get("video_duration")
 
         for tag in extract_hashtags(caption):
             hashtag_counter[tag] = hashtag_counter.get(tag, 0) + 1
 
         transcript = get_transcript(api_key, url)
         if transcript and len(transcript.split()) > 20:
+            word_count = len(transcript.split())
             examples.append({
                 "source": video["_source"],
                 "caption": caption,
                 "views": views,
+                "duration": video_duration,
                 "transcript": transcript.strip(),
             })
+
+            # Only trust WPM from videos with real duration data and a
+            # sane word count (filters out obviously bad/partial data)
+            if video_duration and video_duration > 5 and word_count > 20:
+                wpm = (word_count / video_duration) * 60
+                if 60 <= wpm <= 220:  # sanity range — excludes clearly broken data
+                    wpm_samples.append(wpm)
 
     if not examples:
         print("⚠️ No usable transcripts collected this run. Leaving existing files unchanged.")
@@ -217,7 +231,15 @@ def main():
         json.dump([tag for tag, _ in top_hashtags], f, indent=2)
     print(f"✅ Saved top hashtags to '{TRENDING_HASHTAGS_FILE}': {[t for t,_ in top_hashtags]}")
 
-    notes = analyze_patterns(examples, groq_key)
+    if wpm_samples:
+        avg_wpm = sum(wpm_samples) / len(wpm_samples)
+        with open(TARGET_PACE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"avg_wpm": round(avg_wpm, 1), "sample_size": len(wpm_samples)}, f, indent=2)
+        print(f"✅ Saved target pacing to '{TARGET_PACE_FILE}': {avg_wpm:.1f} WPM (from {len(wpm_samples)} videos)")
+    else:
+        print("ℹ️ No duration data available this run — target_pace.json left unchanged.")
+
+    notes = analyze_patterns(examples, nvidia_key)
     if notes:
         with open(STYLE_NOTES_FILE, "w", encoding="utf-8") as f:
             f.write(notes)
