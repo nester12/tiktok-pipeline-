@@ -1,14 +1,20 @@
 name: update-style-examples
+
 on:
   schedule:
-    - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC — style doesn't shift fast enough to justify more frequent credit spend
-  workflow_dispatch:       # also runnable manually anytime
+    - cron: '0 6 * * *'   # daily 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: style-learning
+  cancel-in-progress: false
 
 jobs:
   update-examples:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -17,22 +23,49 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch style examples from SocialCrawl
+      # Keep the SQLite learning database between workflow runs without
+      # committing a changing binary database into Git history.
+      - name: Restore learning database
+        id: restore-style-db
+        uses: actions/cache/restore@v4
+        with:
+          path: style_learning.db
+          key: style-learning-${{ github.run_id }}
+          restore-keys: |
+            style-learning-
+
+      - name: Fetch and analyse TikTok style examples
         run: python fetch_style_examples.py
         env:
           SOCIALCRAWL_API_KEY: ${{ secrets.SOCIALCRAWL_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 
-      - name: Commit updated style_examples.json
+      - name: Save learning database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: style_learning.db
+          key: style-learning-${{ github.run_id }}
+
+      - name: Commit updated learning outputs
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          if [ -f style_examples.json ]; then
-            git add style_examples.json
-            git diff --staged --quiet || git commit -m "Update style_examples.json from SocialCrawl"
-            git push
+
+          git add \
+            style_examples.json \
+            trending_hashtags.json \
+            trend_summary.json \
+            style_notes.txt \
+            target_pace.json 2>/dev/null || true
+
+          if git diff --staged --quiet; then
+            echo "No learning-output changes to commit."
           else
-            echo "⚠️ No style_examples.json was created this run — nothing to commit."
+            git commit -m "Update TikTok trend learning data"
+            git push
           fi
