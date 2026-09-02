@@ -5,11 +5,7 @@ on:
     - cron: '0 8 * * *'    # run 2 — 08:00 UTC
     - cron: '0 14 * * *'   # run 3 — 14:00 UTC
     - cron: '0 20 * * *'   # run 4 — 20:00 UTC
-  workflow_dispatch:
-
-concurrency:
-  group: tiktok-content-pipeline
-  cancel-in-progress: false
+  workflow_dispatch:        # lets you trigger it manually from the Actions tab
 
 jobs:
   generate-and-post:
@@ -18,8 +14,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,7 +38,8 @@ jobs:
       - name: Generate voiceover + timestamps (also generates the story internally)
         run: python generate_audio.py
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           META1_API_KEY: ${{ secrets.META1_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
@@ -70,36 +65,21 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
           git add pending_queue.json queue_log.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "Update pending backlog / queue log"
 
-          if git diff --staged --quiet; then
-            echo "No backlog or queue-log changes to commit."
-            exit 0
-          fi
-
-          git commit -m "Update pending backlog / queue log"
-
-          # Another workflow may have updated main while this job was running.
-          # Rebase our small generated-data commit on top of the latest main,
-          # then retry the push a few times if another race happens.
           for attempt in 1 2 3; do
             git fetch origin main
-
-            if ! git rebase origin/main; then
-              echo "❌ Rebase conflict while updating generated queue files."
+            git rebase origin/main || {
               git rebase --abort || true
-              exit 1
-            fi
-
+              echo "Rebase failed; preserving local files and retrying on next run."
+              exit 0
+            }
             if git push origin HEAD:main; then
-              echo "✅ Queue changes pushed successfully."
               exit 0
             fi
-
-            echo "⚠️ Push raced with another update; retrying ($attempt/3)..."
+            echo "Push race detected (attempt $attempt/3); retrying..."
             sleep 3
           done
 
-          echo "❌ Could not push after 3 attempts."
-          exit 1
+          echo "Could not push after retries; generated content itself was already processed."
