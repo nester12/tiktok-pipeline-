@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------
-# Story Generator (Groq & Gemini support)
+# Story Generator (Gemini primary, Groq fallback)
 # -------------------------------------------------------------------
 import os
 import json
@@ -9,6 +9,9 @@ import requests
 STORY_OUTPUT_FILE = "story.txt"
 STYLE_EXAMPLES_FILE = "style_examples.json"
 STYLE_NOTES_FILE = "style_notes.txt"
+
+GEMINI_MODEL = os.environ.get("GEMINI_STORY_MODEL", "gemini-3.7-flash")
+GROQ_MODEL = os.environ.get("GROQ_STORY_MODEL", "openai/gpt-oss-120b")
 
 STORY_NICHES = [
     "a shocking family secret discovered at a holiday dinner",
@@ -47,29 +50,35 @@ EXAMPLES = (
 
 
 def load_examples_text():
-    """
-    Uses real transcripts pulled from trending videos + reference accounts
-    (via fetch_style_examples.py) if available, falling back to the
-    hand-written examples otherwise.
-    """
     if os.path.exists(STYLE_EXAMPLES_FILE):
         try:
             with open(STYLE_EXAMPLES_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if data:
-                sample = random.sample(data, min(3, len(data)))
+                # Prefer the best-scored examples when the new learning
+                # pipeline has a trend/video score; otherwise keep backwards
+                # compatibility with older style_examples.json files.
+                ranked = sorted(
+                    data,
+                    key=lambda ex: ex.get("trend_score", ex.get("video_score", ex.get("views", 0))) or 0,
+                    reverse=True,
+                )
+                sample = ranked[: min(5, len(ranked))]
                 text = ""
                 for i, ex in enumerate(sample, 1):
-                    text += f"EXAMPLE {i} (from {ex['source']}):\n{ex['transcript']}\n\n"
-                return text
-        except Exception as e:
-            print(f"⚠️ Could not load {STYLE_EXAMPLES_FILE}, using default examples: {e}")
-
+                    transcript = (ex.get("transcript") or "").strip()
+                    if not transcript:
+                        continue
+                    source = ex.get("source", "trend dataset")
+                    text += f"EXAMPLE {i} (from {source}):\n{transcript}\n\n"
+                if text:
+                    return text
+        except Exception as exc:
+            print(f"⚠️ Could not load {STYLE_EXAMPLES_FILE}, using defaults: {exc}")
     return EXAMPLES
 
 
 def load_style_notes():
-    """AI-derived pattern notes from fetch_style_examples.py's analysis pass, if available."""
     if os.path.exists(STYLE_NOTES_FILE):
         try:
             with open(STYLE_NOTES_FILE, "r", encoding="utf-8") as f:
@@ -82,203 +91,157 @@ def load_style_notes():
 def build_prompt(niche, word_target):
     examples_text = load_examples_text()
     style_notes = load_style_notes()
-
     notes_block = (
-        f"\nCurrent trend analysis notes (patterns seen in recently trending similar videos):\n{style_notes}\n"
+        f"\nCurrent trend analysis notes:\n{style_notes}\n"
         if style_notes else ""
     )
 
     return (
-        f"Write a viral, dramatic, first-person Reddit-style story for a TikTok video, "
-        f"about {niche}. "
-        f"The story MUST be approximately {word_target} words long — this is important, "
-        f"do not go far under or over that word count. "
-        "Start immediately with a shocking hook in the first sentence. "
-        "Make it deeply relatable and emotional — the kind of story someone would send to a friend "
-        "saying 'you won't believe this happened to me.' Use everyday, conversational language. "
-        "Write it the way someone would actually SPEAK it out loud when telling a friend a story — "
-        "flowing sentences connected with 'and,' 'but,' 'so,' and commas, not a rapid string of "
-        "short blunt statements each ending in a period. Vary your rhythm: mix a few longer, "
-        "flowing sentences with the occasional short one for punch at key emotional beats. "
-        "Avoid excessive full stops — a story that's just one short clipped sentence after another "
-        "sounds robotic when read aloud, not like natural narration. "
-        "Keep a clear emotional arc (setup, escalation, twist or resolution) and fast pacing overall, "
-        "but let it breathe like real spoken storytelling.\n\n"
-        "Here are three examples of the exact rhythm, flow, and natural spoken pacing to match "
-        "(do not reuse their topics or details, only match the style and length proportionally):\n\n"
+        f"Write a dramatic, first-person Reddit-style story for a TikTok narration about {niche}. "
+        f"Target approximately {word_target} words and stay close to that target. "
+        "Start immediately with a strong curiosity hook. Use natural conversational language that "
+        "sounds good when spoken aloud. Keep the story moving, with clear conflict and escalation, "
+        "but do not force a twist if the story works better with a reveal, resolution, or cliffhanger. "
+        "Vary sentence length so the narration does not sound robotic. Do not copy wording, people, "
+        "events, or distinctive details from the examples. Learn only from their pacing and structure.\n\n"
+        "High-performing reference examples:\n\n"
         f"{examples_text}"
-        f"{notes_block}"
-        f"Now write a brand new story of about {word_target} words in that same flowing, "
-        f"narrated-aloud style, about {niche}. "
-        "Do NOT include titles, markdown headers (* or #), hashtags, stage directions, or quotes. "
-        "Output ONLY the raw story text."
+        f"{notes_block}\n"
+        f"Now write a completely original story of about {word_target} words about {niche}. "
+        "Do not include a title, markdown, hashtags, stage directions, or commentary. "
+        "Output only the raw story text."
     )
 
 
-def generate_with_nvidia_model(nvidia_key, prompt, model_id, label):
-    print(f"🟩 Generating story using NVIDIA NIM ({label})...")
-
-    url = "https://integrate.api.nvidia.com/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {nvidia_key}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "model": model_id,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a master storyteller writing viral, relatable TikTok Reddit scripts."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "temperature": 0.9,
-        "top_p": 0.95,
-        "max_tokens": 900,
-        "stream": False,
-    }
-
-    # Prevent GitHub Actions from hanging forever
-    # if NVIDIA has a network or endpoint issue.
+def generate_with_gemini(api_key, prompt):
+    print(f"🟦 Generating story with Gemini ({GEMINI_MODEL})...")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
+    )
     response = requests.post(
         url,
-        headers=headers,
-        json=payload,
-        timeout=90
+        params={"key": api_key},
+        headers={"Content-Type": "application/json"},
+        json={
+            "system_instruction": {
+                "parts": [{
+                    "text": "You write original, high-retention short-form spoken stories."
+                }]
+            },
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.9,
+                "topP": 0.95,
+                "maxOutputTokens": 1200,
+            },
+        },
+        timeout=90,
     )
+    if response.status_code != 200:
+        raise RuntimeError(f"Gemini API error {response.status_code}: {response.text[:500]}")
 
-    if response.status_code == 200:
-        data = response.json()
+    data = response.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        raise RuntimeError(f"Gemini returned no candidates: {data}")
 
-        content = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = "".join(part.get("text", "") for part in parts).strip()
+    if not text:
+        raise RuntimeError("Gemini returned an empty story.")
+    return text
 
-        if content and content.strip():
-            return content.strip()
 
-        raise Exception(
-            "NVIDIA NIM returned HTTP 200 but no story text."
-        )
-
-    raise Exception(
-        f"NVIDIA NIM API Error ({response.status_code}): "
-        f"{response.text}"
+def generate_with_groq(api_key, prompt):
+    print(f"🟧 Gemini unavailable; using Groq ({GROQ_MODEL})...")
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": GROQ_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You write original, high-retention short-form spoken stories.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.9,
+            "max_tokens": 1200,
+        },
+        timeout=90,
     )
+    if response.status_code != 200:
+        raise RuntimeError(f"Groq API error {response.status_code}: {response.text[:500]}")
+
+    text = (
+        response.json().get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+        .strip()
+    )
+    if not text:
+        raise RuntimeError("Groq returned an empty story.")
+    return text
 
 
 def generate_story(word_target=240, niche=None):
-    """
-    Generate a story using NVIDIA NIM.
-
-    Two models are configured so the second model
-    is automatically tried if the first one fails.
-
-    The model IDs can also be changed using
-    GitHub Secrets / environment variables.
-    """
-
-    nvidia_key = (
-        os.environ.get("NVIDIA_API_KEY")
-        or os.environ.get("META1_API_KEY")
-    )
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    groq_key = os.environ.get("GROQ_API_KEY")
 
     if niche is None:
         niche = random.choice(STORY_NICHES)
 
     prompt = build_prompt(niche, word_target)
-
-    print(
-        f"🎯 Niche: {niche} | "
-        f"Target words: {word_target}"
-    )
-
-    if not nvidia_key:
-        raise ValueError(
-            "❌ Neither 'NVIDIA_API_KEY' nor "
-            "'META1_API_KEY' found in environment!"
-        )
-
-    models = [
-        (
-            os.environ.get(
-                "NVIDIA_STORY_MODEL_PRIMARY",
-                "nvidia/nemotron-3.5-lightning-30b-a3b"
-            ),
-            "Nemotron 3.5 Lightning 30B",
-        ),
-        (
-            os.environ.get(
-                "NVIDIA_STORY_MODEL_FALLBACK",
-                "deepseek-ai/deepseek-v4-flash-0731"
-            ),
-            "DeepSeek V4 Flash",
-        ),
-    ]
+    print(f"🎯 Niche: {niche} | Target words: {word_target}")
 
     failures = []
 
-    for model_id, label in models:
+    if gemini_key:
         try:
-            story_text = generate_with_nvidia_model(
-                nvidia_key=nvidia_key,
-                prompt=prompt,
-                model_id=model_id,
-                label=label,
-            )
+            story = generate_with_gemini(gemini_key, prompt)
+            print(f"✅ Story generated with Gemini ({GEMINI_MODEL}).")
+            return story
+        except Exception as exc:
+            failures.append(f"Gemini: {exc}")
+            print(f"⚠️ Gemini generation failed: {exc}")
+    else:
+        failures.append("Gemini: GEMINI_API_KEY missing")
 
-            if story_text:
-                print(
-                    f"✅ Story generated with {label}."
-                )
-                return story_text
+    if groq_key:
+        try:
+            story = generate_with_groq(groq_key, prompt)
+            print(f"✅ Story generated with Groq ({GROQ_MODEL}).")
+            return story
+        except Exception as exc:
+            failures.append(f"Groq: {exc}")
+            print(f"⚠️ Groq generation failed: {exc}")
+    else:
+        failures.append("Groq: GROQ_API_KEY missing")
 
-        except Exception as e:
-            failures.append(
-                f"{label}: {e}"
-            )
-
-            print(
-                f"⚠️ {label} generation failed: {e}"
-            )
-
-    details = "\n".join(
-        f"  - {item}"
-        for item in failures
-    )
-
-    raise ValueError(
-        "❌ All configured NVIDIA story models failed.\n"
-        f"{details}\n"
-        "Set NVIDIA_STORY_MODEL_PRIMARY or "
-        "NVIDIA_STORY_MODEL_FALLBACK to another "
-        "hosted NVIDIA model if these endpoints change."
+    details = "\n".join(f"  - {failure}" for failure in failures)
+    raise RuntimeError(
+        "❌ All configured story-generation providers failed.\n"
+        f"{details}"
     )
 
 
 def main():
     story_text = generate_story()
-
-    with open(
-        STORY_OUTPUT_FILE,
-        "w",
-        encoding="utf-8"
-    ) as f:
+    with open(STORY_OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(story_text)
 
     print(
-        f"\n✅ Story saved to "
-        f"'{STORY_OUTPUT_FILE}' "
+        f"\n✅ Story saved to '{STORY_OUTPUT_FILE}' "
         f"({len(story_text.split())} words)\n"
     )
-
     print("=" * 60)
     print(story_text)
     print("=" * 60)
