@@ -82,10 +82,12 @@ def load_style_notes():
 def build_prompt(niche, word_target):
     examples_text = load_examples_text()
     style_notes = load_style_notes()
+
     notes_block = (
         f"\nCurrent trend analysis notes (patterns seen in recently trending similar videos):\n{style_notes}\n"
         if style_notes else ""
     )
+
     return (
         f"Write a viral, dramatic, first-person Reddit-style story for a TikTok video, "
         f"about {niche}. "
@@ -115,64 +117,168 @@ def build_prompt(niche, word_target):
 
 def generate_with_nvidia_model(nvidia_key, prompt, model_id, label):
     print(f"🟩 Generating story using NVIDIA NIM ({label})...")
+
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
+
+    headers = {
+        "Authorization": f"Bearer {nvidia_key}",
+        "Content-Type": "application/json"
+    }
+
     payload = {
         "model": model_id,
         "messages": [
-            {"role": "system", "content": "You are a master storyteller writing viral, relatable TikTok Reddit scripts."},
-            {"role": "user", "content": prompt}
+            {
+                "role": "system",
+                "content": "You are a master storyteller writing viral, relatable TikTok Reddit scripts."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
         ],
         "temperature": 0.9,
-        "max_tokens": 700
+        "top_p": 0.95,
+        "max_tokens": 900,
+        "stream": False,
     }
-    response = requests.post(url, headers=headers, json=payload)
+
+    # Prevent GitHub Actions from hanging forever
+    # if NVIDIA has a network or endpoint issue.
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=90
+    )
+
     if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"].strip()
-    raise Exception(f"NVIDIA NIM API Error ({response.status_code}): {response.text}")
+        data = response.json()
+
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+
+        if content and content.strip():
+            return content.strip()
+
+        raise Exception(
+            "NVIDIA NIM returned HTTP 200 but no story text."
+        )
+
+    raise Exception(
+        f"NVIDIA NIM API Error ({response.status_code}): "
+        f"{response.text}"
+    )
 
 
 def generate_story(word_target=240, niche=None):
-    """Generates a story of roughly word_target words. Returns the story text.
-    Tries Llama 4 Maverick first (best fit for narrative prose), then
-    GLM-5.2 as a fallback, both via NVIDIA NIM."""
-    nvidia_key = os.environ.get("META1_API_KEY") or os.environ.get("NVIDIA_API_KEY")
+    """
+    Generate a story using NVIDIA NIM.
+
+    Two models are configured so the second model
+    is automatically tried if the first one fails.
+
+    The model IDs can also be changed using
+    GitHub Secrets / environment variables.
+    """
+
+    nvidia_key = (
+        os.environ.get("NVIDIA_API_KEY")
+        or os.environ.get("META1_API_KEY")
+    )
 
     if niche is None:
         niche = random.choice(STORY_NICHES)
+
     prompt = build_prompt(niche, word_target)
-    print(f"🎯 Niche: {niche} | Target words: {word_target}")
+
+    print(
+        f"🎯 Niche: {niche} | "
+        f"Target words: {word_target}"
+    )
 
     if not nvidia_key:
-        raise ValueError("❌ Neither 'META1_API_KEY' nor 'NVIDIA_API_KEY' found in environment!")
-
-    story_text = ""
-    try:
-        story_text = generate_with_nvidia_model(
-            nvidia_key, prompt, "meta/llama-3.1-70b-instruct", "Llama 3.1 70B Instruct"
+        raise ValueError(
+            "❌ Neither 'NVIDIA_API_KEY' nor "
+            "'META1_API_KEY' found in environment!"
         )
-    except Exception as e:
-        print(f"⚠️ Llama 3.1 70B generation failed: {e}")
 
-    if not story_text:
+    models = [
+        (
+            os.environ.get(
+                "NVIDIA_STORY_MODEL_PRIMARY",
+                "nvidia/nemotron-3.5-lightning-30b-a3b"
+            ),
+            "Nemotron 3.5 Lightning 30B",
+        ),
+        (
+            os.environ.get(
+                "NVIDIA_STORY_MODEL_FALLBACK",
+                "deepseek-ai/deepseek-v4-flash-0731"
+            ),
+            "DeepSeek V4 Flash",
+        ),
+    ]
+
+    failures = []
+
+    for model_id, label in models:
         try:
             story_text = generate_with_nvidia_model(
-                nvidia_key, prompt, "z-ai/glm-5.2", "GLM-5.2"
+                nvidia_key=nvidia_key,
+                prompt=prompt,
+                model_id=model_id,
+                label=label,
             )
+
+            if story_text:
+                print(
+                    f"✅ Story generated with {label}."
+                )
+                return story_text
+
         except Exception as e:
-            print(f"⚠️ GLM-5.2 generation failed: {e}")
+            failures.append(
+                f"{label}: {e}"
+            )
 
-    if not story_text:
-        raise ValueError("❌ Both Llama 3.1 70B and GLM-5.2 failed to produce a story!")
+            print(
+                f"⚠️ {label} generation failed: {e}"
+            )
 
-    return story_text
+    details = "\n".join(
+        f"  - {item}"
+        for item in failures
+    )
+
+    raise ValueError(
+        "❌ All configured NVIDIA story models failed.\n"
+        f"{details}\n"
+        "Set NVIDIA_STORY_MODEL_PRIMARY or "
+        "NVIDIA_STORY_MODEL_FALLBACK to another "
+        "hosted NVIDIA model if these endpoints change."
+    )
 
 
 def main():
     story_text = generate_story()
-    with open(STORY_OUTPUT_FILE, "w", encoding="utf-8") as f:
+
+    with open(
+        STORY_OUTPUT_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
         f.write(story_text)
-    print(f"\n✅ Story saved to '{STORY_OUTPUT_FILE}' ({len(story_text.split())} words)\n")
+
+    print(
+        f"\n✅ Story saved to "
+        f"'{STORY_OUTPUT_FILE}' "
+        f"({len(story_text.split())} words)\n"
+    )
+
     print("=" * 60)
     print(story_text)
     print("=" * 60)
