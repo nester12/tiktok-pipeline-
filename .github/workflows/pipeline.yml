@@ -5,7 +5,11 @@ on:
     - cron: '0 8 * * *'    # run 2 — 08:00 UTC
     - cron: '0 14 * * *'   # run 3 — 14:00 UTC
     - cron: '0 20 * * *'   # run 4 — 20:00 UTC
-  workflow_dispatch:        # lets you trigger it manually from the Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: tiktok-content-pipeline
+  cancel-in-progress: false
 
 jobs:
   generate-and-post:
@@ -14,6 +18,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -64,6 +70,36 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
           git add pending_queue.json queue_log.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Update pending backlog / queue log"
-          git push
+
+          if git diff --staged --quiet; then
+            echo "No backlog or queue-log changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update pending backlog / queue log"
+
+          # Another workflow may have updated main while this job was running.
+          # Rebase our small generated-data commit on top of the latest main,
+          # then retry the push a few times if another race happens.
+          for attempt in 1 2 3; do
+            git fetch origin main
+
+            if ! git rebase origin/main; then
+              echo "❌ Rebase conflict while updating generated queue files."
+              git rebase --abort || true
+              exit 1
+            fi
+
+            if git push origin HEAD:main; then
+              echo "✅ Queue changes pushed successfully."
+              exit 0
+            fi
+
+            echo "⚠️ Push raced with another update; retrying ($attempt/3)..."
+            sleep 3
+          done
+
+          echo "❌ Could not push after 3 attempts."
+          exit 1
