@@ -1,9 +1,11 @@
 # -------------------------------------------------------------------
 # Story Generator (Gemini primary, Groq fallback)
 # -------------------------------------------------------------------
-import os
 import json
+import os
 import random
+import time
+
 import requests
 
 STORY_OUTPUT_FILE = "story.txt"
@@ -14,6 +16,12 @@ RECENT_TOPICS_FILE = "recent_story_topics.json"
 
 GEMINI_MODEL = os.environ.get("GEMINI_STORY_MODEL", "gemini-3.7-flash")
 GROQ_MODEL = os.environ.get("GROQ_STORY_MODEL", "openai/gpt-oss-120b")
+GROQ_FALLBACK_MODEL = os.environ.get("GROQ_STORY_FALLBACK_MODEL", "openai/gpt-oss-20b")
+
+REQUEST_TIMEOUT = 90
+GEMINI_RETRIES = 3
+GROQ_RETRIES = 2
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 STORY_NICHES = [
     "a shocking family secret discovered at a holiday dinner",
@@ -71,10 +79,9 @@ def load_recent_topics():
 def remember_topic(topic):
     recent = load_recent_topics()
     recent.append(topic)
-    recent = recent[-12:]
     try:
         with open(RECENT_TOPICS_FILE, "w", encoding="utf-8") as f:
-            json.dump(recent, f, indent=2, ensure_ascii=False)
+            json.dump(recent[-12:], f, indent=2, ensure_ascii=False)
     except Exception as exc:
         print(f"⚠️ Could not save recent topic history: {exc}")
 
@@ -113,9 +120,9 @@ def load_trending_topics():
 def is_recently_used(topic, recent):
     topic_words = set(topic.lower().split())
     for old in recent:
-        old_words = set(old.lower().split())
         if topic.lower() == old.lower():
             return True
+        old_words = set(old.lower().split())
         if topic_words and old_words:
             overlap = len(topic_words & old_words) / max(len(topic_words | old_words), 1)
             if overlap >= 0.65:
@@ -124,9 +131,7 @@ def is_recently_used(topic, recent):
 
 
 def weighted_trend_choice(trending, recent):
-    available = [(topic, weight) for topic, weight in trending if not is_recently_used(topic, recent)]
-    if not available:
-        available = trending
+    available = [item for item in trending if not is_recently_used(item[0], recent)] or trending
     if not available:
         return None
     return random.choices(
@@ -137,13 +142,12 @@ def weighted_trend_choice(trending, recent):
 
 
 def create_topic_variation(base_topic):
-    variations = [
+    return random.choice([
         f"a completely different situation involving {base_topic}, with new people, motives, and consequences",
         f"an unexpected personal conflict connected to {base_topic}, told from a different point of view",
         f"a relatable everyday situation that starts around {base_topic} but escalates in an original direction",
         f"a new high-stakes misunderstanding involving {base_topic}, without copying any existing story details",
-    ]
-    return random.choice(variations)
+    ])
 
 
 def select_story_niche():
@@ -174,112 +178,205 @@ def select_story_niche():
 
 
 def load_examples_text():
-    if os.path.exists(STYLE_EXAMPLES_FILE):
-        try:
-            with open(STYLE_EXAMPLES_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if data:
-                ranked = sorted(
-                    data,
-                    key=lambda ex: ex.get("trend_score", ex.get("video_score", ex.get("views", 0))) or 0,
-                    reverse=True,
-                )
-                sample = ranked[: min(5, len(ranked))]
-                text = ""
-                for i, ex in enumerate(sample, 1):
-                    transcript = (ex.get("full_transcript") or ex.get("transcript") or "").strip()
-                    if not transcript:
-                        continue
-                    topic = ex.get("topic", "unknown topic")
-                    score = ex.get("trend_score", "unknown")
-                    text += f"EXAMPLE {i} | topic={topic} | trend_score={score}:\n{transcript}\n\n"
-                if text:
-                    return text
-        except Exception as exc:
-            print(f"⚠️ Could not load {STYLE_EXAMPLES_FILE}, using defaults: {exc}")
+    data = load_json(STYLE_EXAMPLES_FILE, [])
+    if isinstance(data, list) and data:
+        ranked = sorted(
+            data,
+            key=lambda ex: ex.get("trend_score", ex.get("video_score", ex.get("views", 0))) or 0,
+            reverse=True,
+        )
+        text = ""
+        for index, example in enumerate(ranked[:5], start=1):
+            transcript = (example.get("full_transcript") or example.get("transcript") or "").strip()
+            if not transcript:
+                continue
+            topic = example.get("topic", "unknown topic")
+            score = example.get("trend_score", "unknown")
+            text += f"EXAMPLE {index} | topic={topic} | trend_score={score}:\n{transcript}\n\n"
+        if text:
+            return text
     return EXAMPLES
 
 
 def load_style_notes():
-    if os.path.exists(STYLE_NOTES_FILE):
-        try:
+    try:
+        if os.path.exists(STYLE_NOTES_FILE):
             with open(STYLE_NOTES_FILE, "r", encoding="utf-8") as f:
                 return f.read().strip()
-        except Exception:
-            pass
+    except Exception:
+        pass
     return ""
 
 
 def build_prompt(niche, word_target):
-    examples_text = load_examples_text()
     style_notes = load_style_notes()
     notes_block = f"\nCurrent trend analysis notes:\n{style_notes}\n" if style_notes else ""
     return (
         f"Write a dramatic, first-person Reddit-style story for a TikTok narration about {niche}. "
         f"Target approximately {word_target} words and stay close to that target. "
         "Start immediately with a strong curiosity hook. Use natural conversational language that "
-        "sounds good when spoken aloud. Keep the story moving, with clear conflict and escalation, "
-        "but do not force a twist if the story works better with a reveal, resolution, or cliffhanger. "
-        "Vary sentence length so the narration does not sound robotic. Do not copy wording, people, "
-        "events, or distinctive details from the examples. Learn only from their pacing and structure.\n\n"
+        "sounds good when spoken aloud. Keep clear conflict and escalation, but do not force a twist. "
+        "Vary sentence length so narration sounds natural. Do not copy wording, people, events, or "
+        "distinctive details from the references; learn only pacing and structure.\n\n"
         "High-performing reference examples:\n\n"
-        f"{examples_text}"
+        f"{load_examples_text()}"
         f"{notes_block}\n"
-        f"Now write a completely original story of about {word_target} words about {niche}. "
-        "Do not include a title, markdown, hashtags, stage directions, or commentary. "
-        "Output only the raw story text."
+        f"Write a completely original story of about {word_target} words about {niche}. "
+        "No title, markdown, hashtags, stage directions, or commentary. Output only raw story text."
     )
+
+
+def retry_delay(attempt):
+    return min(3 * (2 ** (attempt - 1)) + random.uniform(0.2, 1.2), 15)
+
+
+def extract_gemini_text(data):
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "".join(str(part.get("text", "")) for part in parts).strip()
 
 
 def generate_with_gemini(api_key, prompt):
-    print(f"🟦 Generating story with Gemini ({GEMINI_MODEL})...")
-    url = "https://generativelanguage.googleapis.com/v1beta/models/" f"{GEMINI_MODEL}:generateContent"
-    response = requests.post(
-        url,
-        params={"key": api_key},
-        headers={"Content-Type": "application/json"},
-        json={
-            "system_instruction": {"parts": [{"text": "You write original, high-retention short-form spoken stories."}]},
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.9, "topP": 0.95, "maxOutputTokens": 1200},
-        },
-        timeout=90,
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"Gemini API error {response.status_code}: {response.text[:500]}")
-    data = response.json()
-    candidates = data.get("candidates") or []
-    if not candidates:
-        raise RuntimeError(f"Gemini returned no candidates: {data}")
-    parts = candidates[0].get("content", {}).get("parts", [])
-    text = "".join(part.get("text", "") for part in parts).strip()
-    if not text:
-        raise RuntimeError("Gemini returned an empty story.")
-    return text
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    last_error = None
+
+    for attempt in range(1, GEMINI_RETRIES + 1):
+        print(f"🟦 Gemini ({GEMINI_MODEL}) attempt {attempt}/{GEMINI_RETRIES}...")
+        try:
+            response = requests.post(
+                url,
+                params={"key": api_key},
+                headers={"Content-Type": "application/json"},
+                json={
+                    "system_instruction": {
+                        "parts": [{"text": "You write original, high-retention short-form spoken stories."}]
+                    },
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.9,
+                        "topP": 0.95,
+                        "maxOutputTokens": 1400,
+                    },
+                },
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            last_error = f"network error: {exc}"
+            if attempt < GEMINI_RETRIES:
+                delay = retry_delay(attempt)
+                print(f"⚠️ Gemini network error; retrying in {delay:.1f}s.")
+                time.sleep(delay)
+                continue
+            break
+
+        if response.status_code == 200:
+            try:
+                text = extract_gemini_text(response.json())
+            except ValueError as exc:
+                last_error = f"invalid JSON: {exc}"
+            else:
+                if text:
+                    return text
+                last_error = f"empty response: {response.text[:400]}"
+        else:
+            last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+
+        if response.status_code in RETRYABLE_STATUS and attempt < GEMINI_RETRIES:
+            delay = retry_delay(attempt)
+            print(f"⚠️ Gemini temporary failure ({response.status_code}); retrying in {delay:.1f}s.")
+            time.sleep(delay)
+            continue
+        break
+
+    raise RuntimeError(f"Gemini failed after retries: {last_error}")
 
 
-def generate_with_groq(api_key, prompt):
-    print(f"🟧 Gemini unavailable; using Groq ({GROQ_MODEL})...")
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": GROQ_MODEL,
-            "messages": [
-                {"role": "system", "content": "You write original, high-retention short-form spoken stories."},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.9,
-            "max_tokens": 1200,
-        },
-        timeout=90,
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"Groq API error {response.status_code}: {response.text[:500]}")
-    text = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    if not text:
-        raise RuntimeError("Groq returned an empty story.")
-    return text
+def extract_groq_text(data):
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        pieces = []
+        for part in content:
+            if isinstance(part, str):
+                pieces.append(part)
+            elif isinstance(part, dict):
+                pieces.append(str(part.get("text") or part.get("content") or ""))
+        return "".join(pieces).strip()
+    return ""
+
+
+def generate_with_groq_model(api_key, prompt, model):
+    last_error = None
+    for attempt in range(1, GROQ_RETRIES + 1):
+        print(f"🟧 Groq ({model}) attempt {attempt}/{GROQ_RETRIES}...")
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You write original, high-retention short-form spoken stories. Return only the finished story.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.9,
+                    "max_tokens": 2400,
+                    "reasoning_effort": "low",
+                    "include_reasoning": False,
+                    "stream": False,
+                },
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            last_error = f"network error: {exc}"
+            if attempt < GROQ_RETRIES:
+                delay = retry_delay(attempt)
+                print(f"⚠️ Groq network error; retrying in {delay:.1f}s.")
+                time.sleep(delay)
+                continue
+            break
+
+        if response.status_code == 200:
+            try:
+                data = response.json()
+            except ValueError as exc:
+                last_error = f"invalid JSON: {exc}"
+            else:
+                text = extract_groq_text(data)
+                if text:
+                    return text
+                finish_reason = (data.get("choices") or [{}])[0].get("finish_reason")
+                last_error = f"empty final content (finish_reason={finish_reason}); response={str(data)[:600]}"
+        else:
+            last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+
+        if response.status_code in RETRYABLE_STATUS and attempt < GROQ_RETRIES:
+            delay = retry_delay(attempt)
+            print(f"⚠️ Groq temporary failure ({response.status_code}); retrying in {delay:.1f}s.")
+            time.sleep(delay)
+            continue
+
+        if response.status_code == 200 and attempt < GROQ_RETRIES:
+            delay = retry_delay(attempt)
+            print(f"⚠️ Groq returned no final text; retrying in {delay:.1f}s.")
+            time.sleep(delay)
+            continue
+        break
+
+    raise RuntimeError(f"{model} failed: {last_error}")
 
 
 def generate_story(word_target=240, niche=None):
@@ -287,9 +384,11 @@ def generate_story(word_target=240, niche=None):
     groq_key = os.environ.get("GROQ_API_KEY")
     if niche is None:
         niche = select_story_niche()
+
     prompt = build_prompt(niche, word_target)
     print(f"🎯 Niche: {niche} | Target words: {word_target}")
     failures = []
+
     if gemini_key:
         try:
             story = generate_with_gemini(gemini_key, prompt)
@@ -300,18 +399,25 @@ def generate_story(word_target=240, niche=None):
             print(f"⚠️ Gemini generation failed: {exc}")
     else:
         failures.append("Gemini: GEMINI_API_KEY missing")
+
     if groq_key:
-        try:
-            story = generate_with_groq(groq_key, prompt)
-            print(f"✅ Story generated with Groq ({GROQ_MODEL}).")
-            return story
-        except Exception as exc:
-            failures.append(f"Groq: {exc}")
-            print(f"⚠️ Groq generation failed: {exc}")
+        models = []
+        for model in (GROQ_MODEL, GROQ_FALLBACK_MODEL):
+            if model and model not in models:
+                models.append(model)
+        for model in models:
+            try:
+                story = generate_with_groq_model(groq_key, prompt, model)
+                print(f"✅ Story generated with Groq ({model}).")
+                return story
+            except Exception as exc:
+                failures.append(f"Groq {model}: {exc}")
+                print(f"⚠️ Groq {model} failed: {exc}")
     else:
         failures.append("Groq: GROQ_API_KEY missing")
+
     details = "\n".join(f"  - {failure}" for failure in failures)
-    raise RuntimeError("❌ All configured story-generation providers failed.\n" f"{details}")
+    raise RuntimeError(f"❌ All configured story-generation providers failed.\n{details}")
 
 
 def main():
