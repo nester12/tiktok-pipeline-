@@ -1,11 +1,69 @@
 # -------------------------------------------------------------------
-# Upload video to Cloudinary (replaces GitHub Releases hosting,
-# which gets blocked by bot-detection when fetched by third parties)
+# Upload video to Cloudinary using chunked REST uploads.
+# This avoids Cloudinary's 413 Request Entity Too Large error for
+# videos larger than 100 MB.
 # -------------------------------------------------------------------
 import os
+import uuid
 import requests
 
 VIDEO_PATH = "final_short.mp4"
+CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB; Cloudinary requires >5 MB except final chunk
+TIMEOUT = 180
+
+
+def upload_chunked(video_path, cloud_name, upload_preset):
+    url = f"https://api.cloudinary.com/v1_1/{cloud_name}/video/upload"
+    total_size = os.path.getsize(video_path)
+    upload_id = str(uuid.uuid4())
+    start = 0
+    final_data = None
+
+    print(f"☁️ Uploading {total_size / (1024 * 1024):.1f} MB video to Cloudinary in chunks...")
+
+    with open(video_path, "rb") as f:
+        while start < total_size:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk:
+                break
+
+            end = start + len(chunk) - 1
+            headers = {
+                "X-Unique-Upload-Id": upload_id,
+                "Content-Range": f"bytes {start}-{end}/{total_size}",
+            }
+
+            files = {
+                "file": ("final_short.mp4", chunk, "video/mp4"),
+            }
+            data = {
+                "upload_preset": upload_preset,
+            }
+
+            resp = requests.post(
+                url,
+                headers=headers,
+                data=data,
+                files=files,
+                timeout=TIMEOUT,
+            )
+
+            if not resp.ok:
+                print(f"❌ Cloudinary chunk upload failed ({resp.status_code}): {resp.text[:1000]}")
+                resp.raise_for_status()
+
+            response_data = resp.json()
+            final_data = response_data
+            uploaded_mb = (end + 1) / (1024 * 1024)
+            total_mb = total_size / (1024 * 1024)
+            print(f"   Uploaded {uploaded_mb:.1f}/{total_mb:.1f} MB")
+
+            start = end + 1
+
+    if not final_data:
+        raise RuntimeError("❌ Cloudinary returned no upload response.")
+
+    return final_data
 
 
 def main():
@@ -18,21 +76,7 @@ def main():
     if not os.path.exists(VIDEO_PATH):
         raise FileNotFoundError(f"❌ '{VIDEO_PATH}' missing! Run render_video.py first.")
 
-    print("☁️ Uploading video to Cloudinary...")
-    url = f"https://api.cloudinary.com/v1_1/{cloud_name}/video/upload"
-
-    with open(VIDEO_PATH, "rb") as f:
-        resp = requests.post(
-            url,
-            data={"upload_preset": upload_preset},
-            files={"file": f},
-            timeout=120,
-        )
-
-    if resp.status_code != 200:
-        print(f"❌ Cloudinary error response: {resp.text}")
-    resp.raise_for_status()
-    data = resp.json()
+    data = upload_chunked(VIDEO_PATH, cloud_name, upload_preset)
 
     secure_url = data.get("secure_url")
     if not secure_url:
@@ -40,15 +84,12 @@ def main():
 
     print(f"✅ Uploaded! Public URL: {secure_url}")
 
-    # Write to a plain file so it can be read reliably inside a bash loop
-    # (GitHub's step-output mechanism only captures once per step, not per iteration)
-    with open("video_url.txt", "w") as f:
+    with open("video_url.txt", "w", encoding="utf-8") as f:
         f.write(secure_url)
 
-    # Also make it available via step outputs, for single-run use cases
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
-        with open(github_output, "a") as f:
+        with open(github_output, "a", encoding="utf-8") as f:
             f.write(f"video_url={secure_url}\n")
 
 
