@@ -31,6 +31,8 @@ jobs:
         env:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
           ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
+          ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
+          ZERNIO_QUEUE_ID: ${{ secrets.ZERNIO_QUEUE_ID }}
 
       - name: Fetch background video
         run: python fetch_background.py
@@ -57,6 +59,8 @@ jobs:
         env:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
           ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
+          ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
+          ZERNIO_QUEUE_ID: ${{ secrets.ZERNIO_QUEUE_ID }}
 
       - name: Commit pipeline state changes
         if: always()
