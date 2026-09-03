@@ -8,6 +8,9 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   generate-and-post:
     runs-on: ubuntu-latest
@@ -83,7 +86,7 @@ jobs:
 
             # Remove generated media from the previous video so nothing can be
             # accidentally reused by the next pipeline cycle.
-            rm -f video_url.txt audio_meta.json output.mp3 output.wav final_video.mp4 background.mp4 word_timestamps.json
+            rm -f video_url.txt audio_meta.json narration.wav narration_raw.wav timestamps.json final_short.mp4 background.mp4 story.txt
 
             echo "[${video_number}/4] 1/5 Fetching a fresh background"
             python fetch_background.py
