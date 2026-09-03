@@ -1,10 +1,10 @@
 name: content-pipeline
 on:
   schedule:
-    - cron: '0 2 * * *'    # run 1 — 02:00 UTC
-    - cron: '0 8 * * *'    # run 2 — 08:00 UTC
-    - cron: '0 14 * * *'   # run 3 — 14:00 UTC
-    - cron: '0 20 * * *'   # run 4 — 20:00 UTC
+    # GitHub cron uses UTC. Running at both 05:00 and 06:00 lets the
+    # timezone check below keep this at 06:00 Europe/London through DST.
+    - cron: '0 5 * * *'
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -15,18 +15,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check whether this is 06:00 UK time
+        id: uk_time
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run requested — continuing."
+          elif [ "$(TZ=Europe/London date +%H)" = "06" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "It is 06:00 in Europe/London — starting daily batch."
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Not 06:00 in Europe/London — skipping duplicate DST trigger."
+          fi
+
       - name: Set up Python
+        if: steps.uk_time.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install system audio deps
+        if: steps.uk_time.outputs.should_run == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg espeak-ng
 
       - name: Install Python deps
+        if: steps.uk_time.outputs.should_run == 'true'
         run: pip install -r requirements.txt
 
       - name: Retry any backlogged videos first
+        if: steps.uk_time.outputs.should_run == 'true'
         run: python retry_pending.py
         env:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
@@ -37,29 +56,14 @@ jobs:
           ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
           ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
 
-      - name: Fetch background video
-        run: python fetch_background.py
-
-      - name: Generate voiceover + timestamps (also generates the story internally)
-        run: python generate_audio.py
+      - name: Generate and queue all 4 daily videos
+        if: steps.uk_time.outputs.should_run == 'true'
+        shell: bash
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-
-      - name: Render video
-        run: python render_video.py
-
-      - name: Host video on Cloudinary
-        run: python upload_to_cloudinary.py
-        env:
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
-
-      - name: Post to TikTok via Zernio
-        run: |
-          export VIDEO_URL=$(cat video_url.txt)
-          python upload.py
-        env:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
           ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
           ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
@@ -67,9 +71,36 @@ jobs:
           ZERNIO_MIDDAY_QUEUE_ID: ${{ secrets.ZERNIO_MIDDAY_QUEUE_ID }}
           ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
           ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
+        run: |
+          set -euo pipefail
+
+          for video_number in 1 2 3 4; do
+            echo "============================================================"
+            echo "🎬 Creating daily video ${video_number}/4"
+            echo "============================================================"
+
+            rm -f video_url.txt
+
+            python fetch_background.py
+            python generate_audio.py
+            python render_video.py
+            python upload_to_cloudinary.py
+
+            if [ ! -s video_url.txt ]; then
+              echo "❌ video_url.txt was not created for video ${video_number}."
+              exit 1
+            fi
+
+            export VIDEO_URL="$(cat video_url.txt)"
+            python upload.py
+
+            echo "✅ Video ${video_number}/4 generated and sent to its Zernio queue."
+          done
+
+          echo "🎉 All four daily videos have been generated and queued."
 
       - name: Commit pipeline state changes
-        if: always()
+        if: always() && steps.uk_time.outputs.should_run == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
