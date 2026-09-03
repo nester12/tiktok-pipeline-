@@ -1,12 +1,19 @@
 # -------------------------------------------------------------------
-# Fetch background footage: picks one of several source videos from
-# Google Drive at random, then scores sliding windows across it by
-# frame-to-frame motion (not just random selection) to pick the most
-# dynamic, attention-grabbing segment of the target duration.
+# Fetch background footage from Google Drive.
+#
+# Improvements:
+# - rotates through multiple source videos instead of repeatedly using
+#   whichever one happens to be first after a shuffle
+# - remembers recently used source IDs across pipeline runs
+# - avoids the last few backgrounds whenever alternatives are available
+# - scores candidate sections for motion, then randomly chooses from the
+#   strongest sections instead of always returning the exact same clip
 # -------------------------------------------------------------------
+import json
 import os
 import random
 import subprocess
+
 import cv2
 import numpy as np
 from moviepy.editor import VideoFileClip
@@ -21,28 +28,75 @@ SOURCE_FILE_IDS = [
 
 SOURCE_FILE = "bg_source.mp4"
 OUTPUT_FILE = "background.mp4"
+HISTORY_FILE = "recent_backgrounds.json"
 
-TARGET_DURATION = 130   # generous cushion above the 60-120s story length
-WINDOW_STEP = 20        # seconds between candidate window starts
-SAMPLE_FPS = 2          # frames per second sampled for motion scoring (keeps it fast)
+TARGET_DURATION = 130
+WINDOW_STEP = 20
+SAMPLE_FPS = 2
+
+# With five available sources, avoiding the last three makes consecutive
+# repetition very unlikely while still leaving alternatives on every run.
+RECENT_SOURCE_LIMIT = 3
+
+# Do not always select the single highest-motion section. Pick from the
+# strongest few, weighted by motion score, so the same source can still
+# produce different footage on different occasions.
+TOP_SEGMENTS_TO_CONSIDER = 4
+
+
+def load_recent_sources():
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [str(item) for item in data if str(item) in SOURCE_FILE_IDS][
+                    -RECENT_SOURCE_LIMIT:
+                ]
+    except Exception as exc:
+        print(f"⚠️ Could not read background history: {exc}")
+    return []
+
+
+def remember_source(file_id):
+    recent = load_recent_sources()
+    recent = [item for item in recent if item != file_id]
+    recent.append(file_id)
+    recent = recent[-RECENT_SOURCE_LIMIT:]
+
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(recent, f, indent=2)
+        print(f"🧠 Background history updated ({len(recent)} recent source(s)).")
+    except Exception as exc:
+        print(f"⚠️ Could not save background history: {exc}")
 
 
 def download_source_video(file_id):
     print(f"⬇️ Downloading source footage (file id: {file_id})...")
     subprocess.run(
         ["gdown", f"https://drive.google.com/uc?id={file_id}", "-O", SOURCE_FILE],
-        check=True
+        check=True,
     )
 
 
 def is_valid_video(path):
-    """Uses ffprobe to check the file is a genuinely readable video,
-    not a corrupted/incomplete download."""
+    """Check that the downloaded file is a readable video."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=30
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         duration = float(result.stdout.strip())
         return duration > 0
@@ -50,35 +104,55 @@ def is_valid_video(path):
         return False
 
 
+def build_source_order():
+    """Prefer sources not used in the most recent pipeline runs."""
+    recent = load_recent_sources()
+
+    fresh = [file_id for file_id in SOURCE_FILE_IDS if file_id not in recent]
+    old = [file_id for file_id in SOURCE_FILE_IDS if file_id in recent]
+
+    random.shuffle(fresh)
+    random.shuffle(old)
+
+    print(
+        f"🎞️ Background pool: {len(SOURCE_FILE_IDS)} total | "
+        f"{len(fresh)} preferred | {len(old)} recently used"
+    )
+
+    return fresh + old
+
+
 def download_valid_source():
-    """Tries each source video (in random order) until one downloads
-    and validates successfully, retrying a flaky download once before
-    moving on to the next candidate."""
-    candidates = SOURCE_FILE_IDS.copy()
-    random.shuffle(candidates)
+    """Try unused sources first, falling back to recent ones only if needed."""
+    candidates = build_source_order()
 
     for file_id in candidates:
-        for attempt in range(1, 3):  # up to 2 tries per file
+        for attempt in range(1, 3):
             try:
                 if os.path.exists(SOURCE_FILE):
                     os.remove(SOURCE_FILE)
+
                 download_source_video(file_id)
+
                 if is_valid_video(SOURCE_FILE):
                     print(f"✅ Valid download confirmed (file id: {file_id})")
-                    return
-                else:
-                    print(f"⚠️ Downloaded file failed validation (attempt {attempt}/2) — retrying...")
-            except Exception as e:
-                print(f"⚠️ Download failed (attempt {attempt}/2): {e}")
+                    remember_source(file_id)
+                    return file_id
 
-        print(f"🔁 Giving up on file id {file_id} after 2 attempts, trying a different source video...")
+                print(
+                    f"⚠️ Downloaded file failed validation "
+                    f"(attempt {attempt}/2)."
+                )
+            except Exception as exc:
+                print(f"⚠️ Download failed (attempt {attempt}/2): {exc}")
+
+        print(f"🔁 Source {file_id} failed twice; trying another background...")
 
     raise RuntimeError("❌ None of the source videos could be downloaded successfully.")
 
 
 def score_motion(video_path, start, duration):
-    """Scores a segment by average frame-to-frame pixel difference —
-    higher score = more visual motion/change happening."""
+    """Score a segment using average frame-to-frame visual change."""
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_interval = max(int(fps / SAMPLE_FPS), 1)
@@ -95,49 +169,72 @@ def score_motion(video_path, start, duration):
         ret, frame = cap.read()
         if not ret:
             break
+
         if (frame_idx - start_frame) % frame_interval == 0:
             small = cv2.resize(frame, (160, 284))
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
             if prev_gray is not None:
                 diff = cv2.absdiff(gray, prev_gray)
                 diffs.append(np.mean(diff))
+
             prev_gray = gray
+
         frame_idx += 1
 
     cap.release()
-    return np.mean(diffs) if diffs else 0.0
+    return float(np.mean(diffs)) if diffs else 0.0
 
 
-def find_best_segment(video_path, total_duration, segment_duration):
-    """Slides candidate windows across the video and returns the
-    start time of the most motion-heavy one."""
+def choose_dynamic_segment(video_path, total_duration, segment_duration):
+    """Choose one of the strongest-motion windows rather than one fixed winner."""
     if total_duration <= segment_duration:
         return 0.0
 
-    candidates = []
+    starts = []
     start = 0.0
     while start + segment_duration <= total_duration:
-        candidates.append(start)
+        starts.append(start)
         start += WINDOW_STEP
 
-    if not candidates:
+    # Include the final possible window so long clips do not leave the tail
+    # permanently unused when WINDOW_STEP does not land exactly on it.
+    final_start = max(total_duration - segment_duration, 0.0)
+    if all(abs(existing - final_start) > 1.0 for existing in starts):
+        starts.append(final_start)
+
+    if not starts:
         return 0.0
 
-    print(f"🔍 Scoring {len(candidates)} candidate segments for motion...")
-    best_start, best_score = 0.0, -1
-    for c in candidates:
-        score = score_motion(video_path, c, min(segment_duration, 15))  # sample first 15s of each window for speed
-        print(f"   t={c:.0f}s → motion score {score:.2f}")
-        if score > best_score:
-            best_score = score
-            best_start = c
+    print(f"🔍 Scoring {len(starts)} candidate background sections...")
+    scored = []
 
-    print(f"🏆 Best segment starts at t={best_start:.0f}s (score {best_score:.2f})")
-    return best_start
+    for candidate_start in starts:
+        score = score_motion(
+            video_path,
+            candidate_start,
+            min(segment_duration, 15),
+        )
+        scored.append((candidate_start, score))
+        print(f"   t={candidate_start:.0f}s → motion score {score:.2f}")
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    shortlist = scored[: min(TOP_SEGMENTS_TO_CONSIDER, len(scored))]
+
+    # Keep every candidate selectable even if a score happens to be zero.
+    weights = [max(score, 0.1) for _, score in shortlist]
+    chosen_start, chosen_score = random.choices(shortlist, weights=weights, k=1)[0]
+
+    print(
+        f"🎲 Selected t={chosen_start:.0f}s from the top "
+        f"{len(shortlist)} sections (motion score {chosen_score:.2f})."
+    )
+
+    return chosen_start
 
 
 def main():
-    download_valid_source()
+    selected_source = download_valid_source()
 
     clip = VideoFileClip(SOURCE_FILE)
     total_duration = clip.duration
@@ -145,14 +242,22 @@ def main():
 
     if total_duration <= TARGET_DURATION:
         segment = clip
+        print("ℹ️ Source is shorter than the target window; using the full source.")
     else:
-        best_start = find_best_segment(SOURCE_FILE, total_duration, TARGET_DURATION)
-        segment = clip.subclip(best_start, best_start + TARGET_DURATION)
+        start = choose_dynamic_segment(SOURCE_FILE, total_duration, TARGET_DURATION)
+        segment = clip.subclip(start, start + TARGET_DURATION)
 
-    segment.write_videofile(OUTPUT_FILE, fps=30, codec="libx264", audio=False, preset="fast")
+    segment.write_videofile(
+        OUTPUT_FILE,
+        fps=30,
+        codec="libx264",
+        audio=False,
+        preset="fast",
+    )
+
     clip.close()
 
-    print(f"\n✅ Background segment saved to '{OUTPUT_FILE}'")
+    print(f"✅ Background saved to '{OUTPUT_FILE}' from source {selected_source}.")
 
 
 if __name__ == "__main__":
