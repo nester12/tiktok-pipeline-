@@ -12,6 +12,7 @@ STORY_OUTPUT_FILE = "story.txt"
 STYLE_EXAMPLES_FILE = "style_examples.json"
 STYLE_NOTES_FILE = "style_notes.txt"
 TREND_SUMMARY_FILE = "trend_summary.json"
+PUBLIC_DOMAIN_PATTERNS_FILE = "public_domain_story_patterns.json"
 RECENT_TOPICS_FILE = "recent_story_topics.json"
 
 GEMINI_MODEL = os.environ.get("GEMINI_STORY_MODEL", "gemini-3.7-flash")
@@ -24,39 +25,17 @@ GROQ_RETRIES = 2
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 STORY_NICHES = [
-    "a shocking family secret discovered at a holiday dinner",
-    "a roommate who crossed every boundary imaginable",
-    "catching a partner in a lie that changed everything",
-    "a wedding that fell apart in the most dramatic way",
-    "a neighbor feud that escalated way too far",
-    "a workplace betrayal by someone you trusted",
-    "a landlord doing something completely unhinged",
+    "a shocking family secret discovered at a gathering",
+    "a roommate who crossed a serious boundary",
+    "catching a partner in a lie that changes everything",
+    "a wedding or engagement that falls apart unexpectedly",
+    "a neighbor feud that escalates too far",
+    "a workplace betrayal by someone trusted",
+    "a landlord or housing dispute with a hidden motive",
     "a friend group falling apart over one secret",
-    "an inheritance that tore a family apart",
-    "a stranger's act of kindness that changed a bad day",
+    "an inheritance or money dispute that exposes a family secret",
+    "a stranger's small action that turns out to mean something much bigger",
 ]
-
-EXAMPLES = (
-    "EXAMPLE 1:\n"
-    "My sister asked me to babysit for 'an hour,' but that was six hours ago, and she wasn't "
-    "answering any of my calls. So I checked her location, and she was at a hotel two towns "
-    "over — not working, not stuck in traffic, just at a hotel. I packed the kids' bags right "
-    "there, and when she finally walked in laughing, I was already at the door. I didn't yell, "
-    "I just said 'never again' and left. She's called me eleven times since, and I still haven't "
-    "answered once.\n\n"
-    "EXAMPLE 2:\n"
-    "My roommate kept eating my leftovers, so instead of labeling them again, I made a new dish "
-    "that looked identical to my usual dinner but smelled amazing. She grabbed it the second I "
-    "left for work, and four hours later I got a text in all caps asking what I put in it. It was "
-    "just extremely hot ghost pepper sauce. She moved out two weeks later, and I still make that "
-    "dish — nobody touches my food anymore.\n\n"
-    "EXAMPLE 3:\n"
-    "My landlord raised my rent by four hundred dollars with zero notice, and when I asked why, "
-    "he just said 'market rates.' So I pulled up every violation in the building — the broken "
-    "heater, the mold in the hallway, the missing fire extinguishers — and emailed the housing "
-    "board that same night. Three weeks later, inspectors showed up unannounced, and my rent "
-    "increase mysteriously disappeared. Funny how that works.\n\n"
-)
 
 
 def load_json(path, default):
@@ -143,10 +122,10 @@ def weighted_trend_choice(trending, recent):
 
 def create_topic_variation(base_topic):
     return random.choice([
-        f"a completely different situation involving {base_topic}, with new people, motives, and consequences",
+        f"a completely different situation involving {base_topic}, with new people, motives and consequences",
         f"an unexpected personal conflict connected to {base_topic}, told from a different point of view",
-        f"a relatable everyday situation that starts around {base_topic} but escalates in an original direction",
-        f"a new high-stakes misunderstanding involving {base_topic}, without copying any existing story details",
+        f"a relatable everyday situation that begins around {base_topic} but escalates in a new direction",
+        f"a high-stakes misunderstanding involving {base_topic}, using entirely new story details",
     ])
 
 
@@ -177,27 +156,6 @@ def select_story_niche():
     return niche
 
 
-def load_examples_text():
-    data = load_json(STYLE_EXAMPLES_FILE, [])
-    if isinstance(data, list) and data:
-        ranked = sorted(
-            data,
-            key=lambda ex: ex.get("trend_score", ex.get("video_score", ex.get("views", 0))) or 0,
-            reverse=True,
-        )
-        text = ""
-        for index, example in enumerate(ranked[:5], start=1):
-            transcript = (example.get("full_transcript") or example.get("transcript") or "").strip()
-            if not transcript:
-                continue
-            topic = example.get("topic", "unknown topic")
-            score = example.get("trend_score", "unknown")
-            text += f"EXAMPLE {index} | topic={topic} | trend_score={score}:\n{transcript}\n\n"
-        if text:
-            return text
-    return EXAMPLES
-
-
 def load_style_notes():
     try:
         if os.path.exists(STYLE_NOTES_FILE):
@@ -208,22 +166,111 @@ def load_style_notes():
     return ""
 
 
+def load_tiktok_structure_signals(limit=6):
+    """Return only abstract TikTok analysis. Never send transcripts to the writer."""
+    data = load_json(STYLE_EXAMPLES_FILE, [])
+    if not isinstance(data, list):
+        return []
+    ranked = sorted(
+        [x for x in data if isinstance(x, dict)],
+        key=lambda ex: ex.get("trend_score", ex.get("views", 0)) or 0,
+        reverse=True,
+    )
+    signals = []
+    for example in ranked[:limit]:
+        beats = []
+        for beat in example.get("beats", []) if isinstance(example.get("beats"), list) else []:
+            if isinstance(beat, dict):
+                beats.append({
+                    "type": beat.get("type"),
+                    "start": beat.get("start_position"),
+                    "end": beat.get("end_position"),
+                })
+        signals.append({
+            "topic": example.get("topic"),
+            "hook_type": example.get("hook_type"),
+            "summary": example.get("summary"),
+            "beat_sequence": beats[:12],
+            "trend_score": example.get("trend_score"),
+        })
+    return signals
+
+
+def choose_public_domain_pattern():
+    data = load_json(PUBLIC_DOMAIN_PATTERNS_FILE, [])
+    if not isinstance(data, list) or not data:
+        return None
+    usable = [item for item in data if isinstance(item, dict) and isinstance(item.get("pattern"), dict)]
+    if not usable:
+        return None
+    item = random.choice(usable)
+    pattern = item["pattern"]
+    # Deliberately return no title/author/source text. The writer sees only abstract mechanics.
+    return {
+        "premise_pattern": pattern.get("premise_pattern"),
+        "hook_pattern": pattern.get("hook_pattern"),
+        "conflict_pattern": pattern.get("conflict_pattern"),
+        "escalation_pattern": pattern.get("escalation_pattern"),
+        "misdirection": pattern.get("misdirection"),
+        "twist_type": pattern.get("twist_type"),
+        "twist_setup": pattern.get("twist_setup"),
+        "reveal_mechanism": pattern.get("reveal_mechanism"),
+        "payoff_pattern": pattern.get("payoff_pattern"),
+        "emotional_arc": pattern.get("emotional_arc"),
+        "beat_sequence": pattern.get("beat_sequence"),
+        "adaptable_theme": pattern.get("adaptable_theme"),
+        "retention_lessons": pattern.get("retention_lessons"),
+    }
+
+
 def build_prompt(niche, word_target):
     style_notes = load_style_notes()
-    notes_block = f"\nCurrent trend analysis notes:\n{style_notes}\n" if style_notes else ""
-    return (
-        f"Write a dramatic, first-person Reddit-style story for a TikTok narration about {niche}. "
-        f"Target approximately {word_target} words and stay close to that target. "
-        "Start immediately with a strong curiosity hook. Use natural conversational language that "
-        "sounds good when spoken aloud. Keep clear conflict and escalation, but do not force a twist. "
-        "Vary sentence length so narration sounds natural. Do not copy wording, people, events, or "
-        "distinctive details from the references; learn only pacing and structure.\n\n"
-        "High-performing reference examples:\n\n"
-        f"{load_examples_text()}"
-        f"{notes_block}\n"
-        f"Write a completely original story of about {word_target} words about {niche}. "
-        "No title, markdown, hashtags, stage directions, or commentary. Output only raw story text."
-    )
+    pattern = choose_public_domain_pattern()
+    trend_signals = load_tiktok_structure_signals()
+    min_words = max(120, int(word_target * 0.88))
+    max_words = max(min_words + 20, int(word_target * 1.12))
+
+    pattern_block = json.dumps(pattern, ensure_ascii=False, indent=2) if pattern else "No stored pattern available."
+    trend_block = json.dumps(trend_signals, ensure_ascii=False, indent=2) if trend_signals else "No current TikTok structural signals available."
+
+    return f"""
+Write ONE completely original first-person spoken story for a TikTok/Reddit-style narration.
+
+CURRENT AUDIENCE TOPIC:
+{niche}
+
+LENGTH:
+- Aim for {word_target} words.
+- Stay between about {min_words} and {max_words} words unless the story genuinely needs a little more room.
+- Do not pad the ending just to hit the word count.
+
+PUBLIC-DOMAIN NARRATIVE MECHANIC:
+{pattern_block}
+
+CURRENT TIKTOK STRUCTURAL SIGNALS:
+{trend_block}
+
+STYLE NOTES:
+{style_notes[:5000]}
+
+WRITING RULES:
+- Use the public-domain information ONLY as abstract narrative architecture. Do not reproduce or modernise its original plot, characters, setting, objects, sequence of distinctive events, or wording.
+- TikTok references are trend/structure signals only. Do not reconstruct any source transcript or identifiable creator story.
+- Create brand-new characters, relationships, setting, motives, clues, conflict and outcome.
+- Start with a specific curiosity hook in the first 1-2 sentences. Do not waste time introducing names or background first.
+- Give the protagonist a clear goal or fear, then add concrete complications that make the situation progressively harder.
+- Plant 2-4 subtle details before the reveal. They should seem ordinary at first but make sense differently after the reveal.
+- If the chosen pattern contains a twist/reversal/recontextualisation, make the late reveal meaningful: it must change how the audience understands at least one earlier event. Do not use a random shock with no setup.
+- Do not announce the twist with phrases like 'here is the twist' or 'you won't believe what happened next'. Let the event reveal it.
+- The ending must resolve the main question or deliberately end on a strong natural cliffhanger; do not stop mid-thought.
+- Keep the voice conversational and believable, as if a real person is telling something that happened to them.
+- Use punctuation that helps natural TTS: commas for short pauses, full stops for clear beats, and occasional em dashes only when useful.
+- Avoid excessive quotation dialogue, repeated filler, generic moral lessons, fake engagement bait, hashtags and calls to follow/like.
+- No title, markdown, labels, commentary or source references.
+
+Before writing, silently plan: hook -> context -> conflict -> escalation -> planted clues -> reveal/payoff -> resolution.
+Output ONLY the finished story.
+""".strip()
 
 
 def retry_delay(attempt):
@@ -241,7 +288,6 @@ def extract_gemini_text(data):
 def generate_with_gemini(api_key, prompt):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
     last_error = None
-
     for attempt in range(1, GEMINI_RETRIES + 1):
         print(f"🟦 Gemini ({GEMINI_MODEL}) attempt {attempt}/{GEMINI_RETRIES}...")
         try:
@@ -250,27 +296,18 @@ def generate_with_gemini(api_key, prompt):
                 params={"key": api_key},
                 headers={"Content-Type": "application/json"},
                 json={
-                    "system_instruction": {
-                        "parts": [{"text": "You write original, high-retention short-form spoken stories."}]
-                    },
+                    "system_instruction": {"parts": [{"text": "You are an original short-form storyteller. Build deep causal plots, plant fair clues, and deliver earned reveals without copying reference stories."}]},
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.9,
-                        "topP": 0.95,
-                        "maxOutputTokens": 1400,
-                    },
+                    "generationConfig": {"temperature": 0.95, "topP": 0.95, "maxOutputTokens": 2200},
                 },
                 timeout=REQUEST_TIMEOUT,
             )
         except requests.RequestException as exc:
             last_error = f"network error: {exc}"
             if attempt < GEMINI_RETRIES:
-                delay = retry_delay(attempt)
-                print(f"⚠️ Gemini network error; retrying in {delay:.1f}s.")
-                time.sleep(delay)
+                time.sleep(retry_delay(attempt))
                 continue
             break
-
         if response.status_code == 200:
             try:
                 text = extract_gemini_text(response.json())
@@ -279,17 +316,13 @@ def generate_with_gemini(api_key, prompt):
             else:
                 if text:
                     return text
-                last_error = f"empty response: {response.text[:400]}"
+                last_error = "empty response"
         else:
             last_error = f"HTTP {response.status_code}: {response.text[:500]}"
-
         if response.status_code in RETRYABLE_STATUS and attempt < GEMINI_RETRIES:
-            delay = retry_delay(attempt)
-            print(f"⚠️ Gemini temporary failure ({response.status_code}); retrying in {delay:.1f}s.")
-            time.sleep(delay)
+            time.sleep(retry_delay(attempt))
             continue
         break
-
     raise RuntimeError(f"Gemini failed after retries: {last_error}")
 
 
@@ -297,18 +330,11 @@ def extract_groq_text(data):
     choices = data.get("choices") or []
     if not choices:
         return ""
-    message = choices[0].get("message") or {}
-    content = message.get("content")
+    content = (choices[0].get("message") or {}).get("content")
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
-        pieces = []
-        for part in content:
-            if isinstance(part, str):
-                pieces.append(part)
-            elif isinstance(part, dict):
-                pieces.append(str(part.get("text") or part.get("content") or ""))
-        return "".join(pieces).strip()
+        return "".join(str(p.get("text") or p.get("content") or "") if isinstance(p, dict) else str(p) for p in content).strip()
     return ""
 
 
@@ -319,21 +345,15 @@ def generate_with_groq_model(api_key, prompt, model):
         try:
             response = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": model,
                     "messages": [
-                        {
-                            "role": "system",
-                            "content": "You write original, high-retention short-form spoken stories. Return only the finished story.",
-                        },
+                        {"role": "system", "content": "Write original spoken stories with strong causality, fair clue planting and earned reveals. Return only the story."},
                         {"role": "user", "content": prompt},
                     ],
-                    "temperature": 0.9,
-                    "max_tokens": 2400,
+                    "temperature": 0.95,
+                    "max_tokens": 3000,
                     "reasoning_effort": "low",
                     "include_reasoning": False,
                     "stream": False,
@@ -343,12 +363,9 @@ def generate_with_groq_model(api_key, prompt, model):
         except requests.RequestException as exc:
             last_error = f"network error: {exc}"
             if attempt < GROQ_RETRIES:
-                delay = retry_delay(attempt)
-                print(f"⚠️ Groq network error; retrying in {delay:.1f}s.")
-                time.sleep(delay)
+                time.sleep(retry_delay(attempt))
                 continue
             break
-
         if response.status_code == 200:
             try:
                 data = response.json()
@@ -358,24 +375,13 @@ def generate_with_groq_model(api_key, prompt, model):
                 text = extract_groq_text(data)
                 if text:
                     return text
-                finish_reason = (data.get("choices") or [{}])[0].get("finish_reason")
-                last_error = f"empty final content (finish_reason={finish_reason}); response={str(data)[:600]}"
+                last_error = "empty final content"
         else:
             last_error = f"HTTP {response.status_code}: {response.text[:500]}"
-
         if response.status_code in RETRYABLE_STATUS and attempt < GROQ_RETRIES:
-            delay = retry_delay(attempt)
-            print(f"⚠️ Groq temporary failure ({response.status_code}); retrying in {delay:.1f}s.")
-            time.sleep(delay)
-            continue
-
-        if response.status_code == 200 and attempt < GROQ_RETRIES:
-            delay = retry_delay(attempt)
-            print(f"⚠️ Groq returned no final text; retrying in {delay:.1f}s.")
-            time.sleep(delay)
+            time.sleep(retry_delay(attempt))
             continue
         break
-
     raise RuntimeError(f"{model} failed: {last_error}")
 
 
@@ -393,7 +399,7 @@ def generate_story(word_target=240, niche=None):
         try:
             story = generate_with_gemini(gemini_key, prompt)
             print(f"✅ Story generated with Gemini ({GEMINI_MODEL}).")
-            return story
+            return story.strip()
         except Exception as exc:
             failures.append(f"Gemini: {exc}")
             print(f"⚠️ Gemini generation failed: {exc}")
@@ -409,7 +415,7 @@ def generate_story(word_target=240, niche=None):
             try:
                 story = generate_with_groq_model(groq_key, prompt, model)
                 print(f"✅ Story generated with Groq ({model}).")
-                return story
+                return story.strip()
             except Exception as exc:
                 failures.append(f"Groq {model}: {exc}")
                 print(f"⚠️ Groq {model} failed: {exc}")
@@ -425,9 +431,6 @@ def main():
     with open(STORY_OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(story_text)
     print(f"\n✅ Story saved to '{STORY_OUTPUT_FILE}' ({len(story_text.split())} words)\n")
-    print("=" * 60)
-    print(story_text)
-    print("=" * 60)
 
 
 if __name__ == "__main__":
