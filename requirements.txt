@@ -1,6 +1,7 @@
 requests
 google-generativeai
-chatterbox-tts
+kokoro>=0.9.4
+soundfile
 openai-whisper
 moviepy==1.0.3
 pillow==9.5.0
