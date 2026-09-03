@@ -63,7 +63,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add pending_queue.json queue_log.json recent_story_topics.json 2>/dev/null || true
+          git add pending_queue.json queue_log.json recent_story_topics.json recent_backgrounds.json 2>/dev/null || true
           git diff --staged --quiet || git commit -m "Update pipeline state"
 
           for attempt in 1 2 3; do
