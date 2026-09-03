@@ -32,7 +32,10 @@ jobs:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
           ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
           ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
-          ZERNIO_QUEUE_ID: ${{ secrets.ZERNIO_QUEUE_ID }}
+          ZERNIO_MORNING_QUEUE_ID: ${{ secrets.ZERNIO_MORNING_QUEUE_ID }}
+          ZERNIO_MIDDAY_QUEUE_ID: ${{ secrets.ZERNIO_MIDDAY_QUEUE_ID }}
+          ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
+          ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
 
       - name: Fetch background video
         run: python fetch_background.py
@@ -60,14 +63,17 @@ jobs:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
           ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
           ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
-          ZERNIO_QUEUE_ID: ${{ secrets.ZERNIO_QUEUE_ID }}
+          ZERNIO_MORNING_QUEUE_ID: ${{ secrets.ZERNIO_MORNING_QUEUE_ID }}
+          ZERNIO_MIDDAY_QUEUE_ID: ${{ secrets.ZERNIO_MIDDAY_QUEUE_ID }}
+          ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
+          ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
 
       - name: Commit pipeline state changes
         if: always()
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add pending_queue.json queue_log.json recent_story_topics.json recent_backgrounds.json 2>/dev/null || true
+          git add pending_queue.json queue_log.json queue_rotation_state.json recent_story_topics.json recent_backgrounds.json 2>/dev/null || true
           git diff --staged --quiet || git commit -m "Update pipeline state"
 
           for attempt in 1 2 3; do
