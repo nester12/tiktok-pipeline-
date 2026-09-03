@@ -1,12 +1,14 @@
 # -------------------------------------------------------------------
 # Retry videos left in the backlog from previous runs.
-# Uses the same Zernio profile queue as new posts when configured.
+# Uses the same four-queue rotation as new posts.
 # -------------------------------------------------------------------
 import os
 import json
 
 from upload import (
     PENDING_QUEUE_FILE,
+    advance_queue_rotation,
+    choose_next_queue,
     load_pending_queue,
     log_queued_post,
     post_to_zernio,
@@ -17,7 +19,6 @@ def main():
     api_key = os.environ.get("ZERNIO_API_KEY")
     account_id = os.environ.get("ZERNIO_TIKTOK_ACCOUNT_ID")
     profile_id = os.environ.get("ZERNIO_PROFILE_ID")
-    queue_id = os.environ.get("ZERNIO_QUEUE_ID")
 
     if not api_key or not account_id:
         print("⚠️ Missing Zernio credentials — skipping backlog retry.")
@@ -32,6 +33,10 @@ def main():
     still_pending = []
 
     for index, item in enumerate(queue):
+        queue_name, queue_id = choose_next_queue()
+        if queue_name:
+            print(f"🔄 Backlog post using queue: {queue_name}")
+
         success, result = post_to_zernio(
             item["video_url"],
             item["caption"],
@@ -44,13 +49,16 @@ def main():
         if success:
             print(
                 f"✅ Backlog video accepted — post {result['post_id']} | "
-                f"scheduled for {result['scheduled_for']}"
+                f"scheduled for {result['scheduled_for']} | queue {queue_name or 'default'}"
             )
             log_queued_post(
                 item["video_url"],
                 result["scheduled_for"],
                 result["queue_id"],
+                queue_name,
             )
+            if queue_id:
+                advance_queue_rotation()
         else:
             print(f"❌ Still couldn't post ({result}) — keeping in backlog.")
             still_pending.append(item)
