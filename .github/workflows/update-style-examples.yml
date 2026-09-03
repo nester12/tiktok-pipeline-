@@ -2,7 +2,10 @@ name: update-style-examples
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # daily 06:00 UTC
+    # Run at 04:00 Europe/London year-round. GitHub cron is UTC, so both
+    # possible UTC hours are scheduled and the timezone guard keeps one.
+    - cron: '0 3 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -18,17 +21,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check whether this is 04:00 UK time
+        id: uk_time
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$(TZ=Europe/London date +%H)" = "04" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
+        if: steps.uk_time.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.uk_time.outputs.should_run == 'true'
         run: pip install requests
 
-      # Keep the SQLite learning database between workflow runs without
-      # committing a changing binary database into Git history.
       - name: Restore learning database
+        if: steps.uk_time.outputs.should_run == 'true'
         id: restore-style-db
         uses: actions/cache/restore@v4
         with:
@@ -37,7 +53,8 @@ jobs:
           restore-keys: |
             style-learning-
 
-      - name: Fetch and analyse TikTok style examples
+      - name: Fetch and analyse TikTok trend structures
+        if: steps.uk_time.outputs.should_run == 'true'
         run: python fetch_style_examples.py
         env:
           SOCIALCRAWL_API_KEY: ${{ secrets.SOCIALCRAWL_API_KEY }}
@@ -45,19 +62,21 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 
       - name: Learn proven twists from public-domain stories
+        if: steps.uk_time.outputs.should_run == 'true'
         run: python fetch_public_domain_examples.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 
       - name: Save learning database
-        if: always()
+        if: always() && steps.uk_time.outputs.should_run == 'true'
         uses: actions/cache/save@v4
         with:
           path: style_learning.db
           key: style-learning-${{ github.run_id }}
 
       - name: Commit updated learning outputs
+        if: steps.uk_time.outputs.should_run == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
