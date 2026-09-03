@@ -1,5 +1,7 @@
 # -------------------------------------------------------------------
-# Post to TikTok via Zernio's unified posting API
+# Post to TikTok via Zernio's unified posting API.
+# Rotates successful posts across four profile queues:
+# Morning -> Midday -> Afternoon -> Evening -> repeat.
 # -------------------------------------------------------------------
 import os
 import sys
@@ -19,6 +21,14 @@ MAX_HOOK_WORDS = 18
 
 PENDING_QUEUE_FILE = "pending_queue.json"
 QUEUE_LOG_FILE = "queue_log.json"
+QUEUE_STATE_FILE = "queue_rotation_state.json"
+
+QUEUE_ENV_ORDER = [
+    ("Morning", "ZERNIO_MORNING_QUEUE_ID"),
+    ("Midday", "ZERNIO_MIDDAY_QUEUE_ID"),
+    ("Afternoon", "ZERNIO_AFTERNOON_QUEUE_ID"),
+    ("Evening", "ZERNIO_EVENING_QUEUE_ID"),
+]
 
 
 def build_hashtags():
@@ -69,7 +79,7 @@ def save_to_pending_queue(video_url, caption):
     print(f"💾 Saved unposted video to backlog ({PENDING_QUEUE_FILE}).")
 
 
-def log_queued_post(video_url, due_at, queue_id=None):
+def log_queued_post(video_url, due_at, queue_id=None, queue_name=None):
     log = []
     if os.path.exists(QUEUE_LOG_FILE):
         try:
@@ -77,13 +87,59 @@ def log_queued_post(video_url, due_at, queue_id=None):
                 log = json.load(f)
         except Exception:
             log = []
-    log.append({"video_url": video_url, "due_at": due_at, "queue_id": queue_id})
+    log.append({
+        "video_url": video_url,
+        "due_at": due_at,
+        "queue_id": queue_id,
+        "queue_name": queue_name,
+    })
     with open(QUEUE_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(log, f, indent=2)
 
 
+def configured_queues():
+    queues = []
+    missing = []
+    for name, env_name in QUEUE_ENV_ORDER:
+        queue_id = os.environ.get(env_name)
+        if queue_id:
+            queues.append((name, queue_id))
+        else:
+            missing.append(env_name)
+    if missing:
+        print(f"⚠️ Missing queue secret(s): {', '.join(missing)}")
+    return queues
+
+
+def load_rotation_index():
+    try:
+        if os.path.exists(QUEUE_STATE_FILE):
+            with open(QUEUE_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return max(int(data.get("next_index", 0)), 0)
+    except Exception as exc:
+        print(f"⚠️ Could not read queue rotation state: {exc}")
+    return 0
+
+
+def choose_next_queue():
+    queues = configured_queues()
+    if not queues:
+        return None, None
+    index = load_rotation_index() % len(queues)
+    return queues[index]
+
+
+def advance_queue_rotation():
+    queues = configured_queues()
+    if not queues:
+        return
+    next_index = (load_rotation_index() + 1) % len(queues)
+    with open(QUEUE_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"next_index": next_index}, f, indent=2)
+
+
 def post_to_zernio(video_url, caption, api_key, account_id, profile_id=None, queue_id=None):
-    """Create a TikTok post. Uses Zernio profile queue scheduling when profile_id is set."""
     payload = {
         "platforms": [{"platform": "tiktok", "accountId": account_id}],
         "content": caption,
@@ -94,7 +150,7 @@ def post_to_zernio(video_url, caption, api_key, account_id, profile_id=None, que
         payload["queuedFromProfile"] = profile_id
         if queue_id:
             payload["queueId"] = queue_id
-        print(f"🗓️ Sending post to Zernio profile queue: {profile_id}")
+        print(f"🗓️ Sending post through Zernio profile queue.")
     else:
         print("⚠️ ZERNIO_PROFILE_ID not set — posting immediately instead of using a queue.")
 
@@ -114,15 +170,11 @@ def post_to_zernio(video_url, caption, api_key, account_id, profile_id=None, que
 
     if resp.status_code in (200, 201):
         post = data.get("post") if isinstance(data.get("post"), dict) else data
-        post_id = post.get("id") or post.get("postId") or "unknown-id"
-        due = post.get("scheduledFor") or "immediately"
-        assigned_queue = post.get("queueId") or data.get("queueId")
-        status = post.get("status") or data.get("status") or "unknown"
         return True, {
-            "post_id": post_id,
-            "scheduled_for": due,
-            "queue_id": assigned_queue,
-            "status": status,
+            "post_id": post.get("id") or post.get("postId") or "unknown-id",
+            "scheduled_for": post.get("scheduledFor") or "immediately",
+            "queue_id": post.get("queueId") or data.get("queueId") or queue_id,
+            "status": post.get("status") or data.get("status") or "unknown",
         }
 
     error_msg = data.get("error") or data.get("message") or f"HTTP {resp.status_code}: {data}"
@@ -133,7 +185,6 @@ def main():
     api_key = os.environ.get("ZERNIO_API_KEY")
     account_id = os.environ.get("ZERNIO_TIKTOK_ACCOUNT_ID")
     profile_id = os.environ.get("ZERNIO_PROFILE_ID")
-    queue_id = os.environ.get("ZERNIO_QUEUE_ID")
     video_url = os.environ.get("VIDEO_URL")
 
     missing = [name for name, val in [
@@ -144,17 +195,13 @@ def main():
     if missing:
         raise ValueError(f"❌ Missing required environment variable(s): {', '.join(missing)}")
 
-    print("📤 Sending TikTok post to Zernio...")
-    print(f"   Video URL: {video_url}")
+    queue_name, queue_id = choose_next_queue()
+    if queue_name:
+        print(f"🔄 Next Zernio queue: {queue_name}")
 
     caption = build_caption()
-    print(f"   Caption: {caption}")
-
     success, result = post_to_zernio(
-        video_url,
-        caption,
-        api_key,
-        account_id,
+        video_url, caption, api_key, account_id,
         profile_id=profile_id,
         queue_id=queue_id,
     )
@@ -162,9 +209,16 @@ def main():
     if success:
         print(
             f"🎉 SUCCESS — post {result['post_id']} | status {result['status']} | "
-            f"scheduled for {result['scheduled_for']}"
+            f"scheduled for {result['scheduled_for']} | queue {queue_name or 'default'}"
         )
-        log_queued_post(video_url, result["scheduled_for"], result["queue_id"])
+        log_queued_post(
+            video_url,
+            result["scheduled_for"],
+            result["queue_id"],
+            queue_name,
+        )
+        if queue_id:
+            advance_queue_rotation()
     else:
         print(f"❌ Zernio rejected the post: {result}")
         save_to_pending_queue(video_url, caption)
