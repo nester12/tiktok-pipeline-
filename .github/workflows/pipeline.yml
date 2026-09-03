@@ -1,4 +1,5 @@
 name: content-pipeline
+
 on:
   schedule:
     # GitHub cron uses UTC. Running at both 05:00 and 06:00 lets the
@@ -10,8 +11,8 @@ on:
 jobs:
   generate-and-post:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 120
+
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +39,7 @@ jobs:
 
       - name: Install system audio deps
         if: steps.uk_time.outputs.should_run == 'true'
-        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg espeak-ng
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
 
       - name: Install Python deps
         if: steps.uk_time.outputs.should_run == 'true'
@@ -46,7 +47,6 @@ jobs:
 
       - name: Retry any backlogged videos first
         if: steps.uk_time.outputs.should_run == 'true'
-        run: python retry_pending.py
         env:
           ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
           ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
@@ -55,8 +55,9 @@ jobs:
           ZERNIO_MIDDAY_QUEUE_ID: ${{ secrets.ZERNIO_MIDDAY_QUEUE_ID }}
           ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
           ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
+        run: python retry_pending.py
 
-      - name: Generate and queue all 4 daily videos
+      - name: Generate and queue all 4 daily videos sequentially
         if: steps.uk_time.outputs.should_run == 'true'
         shell: bash
         env:
@@ -74,51 +75,66 @@ jobs:
         run: |
           set -euo pipefail
 
-          for video_number in 1 2 3 4; do
+          run_one_video() {
+            video_number="$1"
             echo "============================================================"
-            echo "🎬 Creating daily video ${video_number}/4"
+            echo "Creating video ${video_number}/4 as a complete pipeline"
             echo "============================================================"
 
-            rm -f video_url.txt
+            # Remove generated media from the previous video so nothing can be
+            # accidentally reused by the next pipeline cycle.
+            rm -f video_url.txt audio_meta.json output.mp3 output.wav final_video.mp4 background.mp4 word_timestamps.json
 
+            echo "[${video_number}/4] 1/5 Fetching a fresh background"
             python fetch_background.py
+
+            echo "[${video_number}/4] 2/5 Generating this video's story and audio"
             python generate_audio.py
+
+            echo "[${video_number}/4] 3/5 Rendering this video"
             python render_video.py
+
+            echo "[${video_number}/4] 4/5 Uploading this video to Cloudinary"
             python upload_to_cloudinary.py
 
             if [ ! -s video_url.txt ]; then
-              echo "❌ video_url.txt was not created for video ${video_number}."
-              exit 1
+              echo "video_url.txt was not created for video ${video_number}."
+              return 1
             fi
 
+            echo "[${video_number}/4] 5/5 Sending this video to its Zernio queue"
             export VIDEO_URL="$(cat video_url.txt)"
             python upload.py
 
-            echo "✅ Video ${video_number}/4 generated and sent to its Zernio queue."
-          done
+            echo "Video ${video_number}/4 finished completely before the next video starts."
+          }
 
-          echo "🎉 All four daily videos have been generated and queued."
+          run_one_video 1
+          run_one_video 2
+          run_one_video 3
+          run_one_video 4
+
+          echo "All four independent video pipelines completed."
 
       - name: Commit pipeline state changes
         if: always() && steps.uk_time.outputs.should_run == 'true'
+        shell: bash
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pending_queue.json queue_log.json queue_rotation_state.json recent_story_topics.json recent_backgrounds.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Update pipeline state"
-
+          if git diff --cached --quiet; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+          git commit -m "Update pipeline state" || exit 0
           for attempt in 1 2 3; do
             git fetch origin main
-            git rebase origin/main || {
-              git rebase --abort || true
-              echo "Rebase failed; preserving local files and retrying on next run."
-              exit 0
-            }
-            if git push origin HEAD:main; then
+            if git rebase origin/main && git push origin HEAD:main; then
               exit 0
             fi
-            echo "Push race detected (attempt $attempt/3); retrying..."
-            sleep 3
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 3))
           done
-
-          echo "Could not push after retries; generated content itself was already processed."
+          echo "Could not push state changes after retries."
+          exit 1
