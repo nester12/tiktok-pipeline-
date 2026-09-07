@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -23,11 +24,26 @@ def run(*args):
     subprocess.run(list(args), check=True)
 
 
+def google_drive_file_id(url):
+    patterns = [
+        r"/file/d/([A-Za-z0-9_-]+)",
+        r"[?&]id=([A-Za-z0-9_-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    raise ValueError("Could not extract a Google Drive file ID from VOICE_SOURCE_URL")
+
+
 def download_source():
     print("Downloading permitted voice reference from Google Drive...")
-    gdown.download(url=VOICE_SOURCE_URL, output=str(SOURCE_VIDEO), fuzzy=True, quiet=False)
-    if not SOURCE_VIDEO.exists() or SOURCE_VIDEO.stat().st_size == 0:
-        raise RuntimeError("Voice reference download failed. Check the Google Drive sharing setting.")
+    file_id = google_drive_file_id(VOICE_SOURCE_URL)
+    result = gdown.download(id=file_id, output=str(SOURCE_VIDEO), quiet=False)
+    if not result or not SOURCE_VIDEO.exists() or SOURCE_VIDEO.stat().st_size == 0:
+        raise RuntimeError(
+            "Voice reference download failed. Make sure the Google Drive file is shared as Anyone with the link."
+        )
 
 
 def extract_reference():
