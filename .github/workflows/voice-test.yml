@@ -42,7 +42,8 @@ jobs:
       - name: Install OpenVoice V2 and MeloTTS
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install gdown
+          pip install gdown 'Cython==0.29.36'
+          pip install 'av==10.0.0' --no-build-isolation
           git clone --depth 1 https://github.com/myshell-ai/OpenVoice.git /tmp/OpenVoice
           pip install -e /tmp/OpenVoice
           pip install git+https://github.com/myshell-ai/MeloTTS.git
