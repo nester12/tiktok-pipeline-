@@ -4,8 +4,11 @@ import subprocess
 from pathlib import Path
 
 import gdown
+import torch
+from melo.api import TTS
+from openvoice import se_extractor
+from openvoice.api import ToneColorConverter
 
-# Separate voice-cloning test pipeline. It does not modify the production TikTok pipeline.
 VOICE_SOURCE_URL = os.environ.get(
     "VOICE_SOURCE_URL",
     "https://drive.google.com/file/d/154LMIYT2ocStkSafa8SM8mSrbsVcpxm3/view?usp=sharing",
@@ -17,7 +20,9 @@ TEST_TEXT = os.environ.get(
 
 SOURCE_VIDEO = Path("voice_source.mp4")
 REFERENCE_WAV = Path("voice_reference.wav")
+BASE_WAV = Path("voice_base.wav")
 OUTPUT_WAV = Path("voice_test_output.wav")
+CHECKPOINT_DIR = Path("checkpoints_v2")
 
 
 def run(*args):
@@ -25,11 +30,7 @@ def run(*args):
 
 
 def google_drive_file_id(url):
-    patterns = [
-        r"/file/d/([A-Za-z0-9_-]+)",
-        r"[?&]id=([A-Za-z0-9_-]+)",
-    ]
-    for pattern in patterns:
+    for pattern in (r"/file/d/([A-Za-z0-9_-]+)", r"[?&]id=([A-Za-z0-9_-]+)"):
         match = re.search(pattern, url)
         if match:
             return match.group(1)
@@ -38,16 +39,17 @@ def google_drive_file_id(url):
 
 def download_source():
     print("Downloading permitted voice reference from Google Drive...")
-    file_id = google_drive_file_id(VOICE_SOURCE_URL)
-    result = gdown.download(id=file_id, output=str(SOURCE_VIDEO), quiet=False)
+    result = gdown.download(
+        id=google_drive_file_id(VOICE_SOURCE_URL),
+        output=str(SOURCE_VIDEO),
+        quiet=False,
+    )
     if not result or not SOURCE_VIDEO.exists() or SOURCE_VIDEO.stat().st_size == 0:
-        raise RuntimeError(
-            "Voice reference download failed. Make sure the Google Drive file is shared as Anyone with the link."
-        )
+        raise RuntimeError("Voice reference download failed. Check the Google Drive sharing setting.")
 
 
 def extract_reference():
-    print("Extracting and normalizing reference audio...")
+    print("Extracting reference audio...")
     run(
         "ffmpeg", "-y", "-i", str(SOURCE_VIDEO),
         "-vn", "-ac", "1", "-ar", "24000",
@@ -57,19 +59,47 @@ def extract_reference():
 
 
 def clone_voice():
-    print("Loading XTTS v2...")
-    from TTS.api import TTS
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    converter_dir = CHECKPOINT_DIR / "converter"
+    config_path = converter_dir / "config.json"
+    checkpoint_path = converter_dir / "checkpoint.pth"
 
-    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
-    print("Generating voice-clone test...")
-    tts.tts_to_file(
-        text=TEST_TEXT,
-        speaker_wav=str(REFERENCE_WAV),
-        language="en",
-        file_path=str(OUTPUT_WAV),
+    if not config_path.exists() or not checkpoint_path.exists():
+        raise RuntimeError("OpenVoice V2 checkpoints are missing from checkpoints_v2/converter")
+
+    print(f"Loading OpenVoice V2 on {device}...")
+    converter = ToneColorConverter(str(config_path), device=device)
+    converter.load_ckpt(str(checkpoint_path))
+
+    print("Extracting target speaker tone colour...")
+    target_se, _ = se_extractor.get_se(
+        str(REFERENCE_WAV), converter, vad=True
     )
+
+    print("Generating natural English base speech with MeloTTS...")
+    model = TTS(language="EN", device=device)
+    speaker_ids = model.hps.data.spk2id
+    preferred = next((name for name in speaker_ids if "EN-US" in name.upper()), None)
+    if preferred is None:
+        preferred = next(iter(speaker_ids))
+    speaker_id = speaker_ids[preferred]
+    model.tts_to_file(TEST_TEXT, speaker_id, str(BASE_WAV), speed=1.0)
+
+    print(f"Converting base voice to permitted reference voice using {preferred}...")
+    source_se = torch.load(
+        CHECKPOINT_DIR / "base_speakers" / "ses" / f"{preferred.lower()}.pth",
+        map_location=device,
+    )
+    converter.convert(
+        audio_src_path=str(BASE_WAV),
+        src_se=source_se,
+        tgt_se=target_se,
+        output_path=str(OUTPUT_WAV),
+        message="@MyShell",
+    )
+
     if not OUTPUT_WAV.exists() or OUTPUT_WAV.stat().st_size == 0:
-        raise RuntimeError("XTTS did not create the test audio.")
+        raise RuntimeError("OpenVoice did not create the cloned voice test.")
     print(f"Created {OUTPUT_WAV}")
 
 
