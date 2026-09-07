@@ -27,7 +27,17 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libsndfile1
+          sudo apt-get install -y \
+            ffmpeg \
+            libsndfile1 \
+            pkg-config \
+            libavformat-dev \
+            libavcodec-dev \
+            libavdevice-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libswscale-dev \
+            libswresample-dev
 
       - name: Install OpenVoice V2 and MeloTTS
         run: |
