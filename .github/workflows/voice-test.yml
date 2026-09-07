@@ -1,0 +1,47 @@
+name: voice-clone-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_text:
+        description: 'Short sentence for the cloned voice to read'
+        required: false
+        default: 'I thought it was going to be an ordinary day, but one small detail changed everything.'
+
+permissions:
+  contents: read
+
+jobs:
+  test-voice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install voice cloning dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'TTS==0.22.0' gdown
+
+      - name: Download reference and generate cloned voice test
+        env:
+          VOICE_SOURCE_URL: 'https://drive.google.com/file/d/154LMIYT2ocStkSafa8SM8mSrbsVcpxm3/view?usp=sharing'
+          VOICE_TEST_TEXT: ${{ inputs.test_text }}
+        run: python voice_test.py
+
+      - name: Upload voice test
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloned-voice-test
+          path: voice_test_output.wav
+          if-no-files-found: error
+          retention-days: 3
