@@ -14,7 +14,7 @@ permissions:
 jobs:
   test-voice:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -22,26 +22,48 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Install voice cloning dependencies
+      - name: Install system dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install 'TTS==0.22.0' gdown
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsndfile1
 
-      - name: Download reference and generate cloned voice test
+      - name: Install OpenVoice V2 and MeloTTS
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install gdown
+          git clone --depth 1 https://github.com/myshell-ai/OpenVoice.git /tmp/OpenVoice
+          pip install -e /tmp/OpenVoice
+          pip install git+https://github.com/myshell-ai/MeloTTS.git
+          python -m unidic download
+
+      - name: Download OpenVoice V2 checkpoints
+        run: |
+          wget -q --show-progress -O /tmp/checkpoints_v2.zip https://myshell-public-repo-host.s3.amazonaws.com/openvoice/checkpoints_v2_0417.zip
+          unzip -q /tmp/checkpoints_v2.zip -d /tmp/openvoice-checkpoints
+          rm -rf checkpoints_v2
+          if [ -d /tmp/openvoice-checkpoints/checkpoints_v2 ]; then
+            mv /tmp/openvoice-checkpoints/checkpoints_v2 ./checkpoints_v2
+          else
+            mkdir -p checkpoints_v2
+            cp -R /tmp/openvoice-checkpoints/* checkpoints_v2/
+          fi
+          test -f checkpoints_v2/converter/config.json
+          test -f checkpoints_v2/converter/checkpoint.pth
+
+      - name: Generate OpenVoice clone test
         env:
           VOICE_SOURCE_URL: 'https://drive.google.com/file/d/154LMIYT2ocStkSafa8SM8mSrbsVcpxm3/view?usp=sharing'
           VOICE_TEST_TEXT: ${{ inputs.test_text }}
-        run: python voice_test.py
+        run: |
+          export PYTHONPATH="/tmp/OpenVoice:${PYTHONPATH}"
+          python voice_test.py
 
       - name: Upload voice test
         uses: actions/upload-artifact@v4
         with:
-          name: cloned-voice-test
+          name: openvoice-v2-cloned-voice-test
           path: voice_test_output.wav
           if-no-files-found: error
           retention-days: 3
