@@ -55,7 +55,6 @@ jobs:
         run: |
           python - <<'PY'
           import nltk
-
           resources = [
               "averaged_perceptron_tagger",
               "averaged_perceptron_tagger_eng",
@@ -64,33 +63,53 @@ jobs:
               "punkt_tab",
           ]
           for resource in resources:
-              print(f"Downloading NLTK resource: {resource}")
               nltk.download(resource, download_dir="/home/runner/nltk_data", quiet=False, raise_on_error=True)
-
-          checks = [
+          for path in [
               "taggers/averaged_perceptron_tagger",
               "taggers/averaged_perceptron_tagger_eng",
               "corpora/cmudict",
-          ]
-          for path in checks:
+          ]:
               nltk.data.find(path)
               print(f"Verified: {path}")
-
           from nltk import pos_tag
-          tagged = pos_tag(["OpenVoice", "test"])
-          print("NLTK POS tagger test passed:", tagged)
+          print("NLTK POS tagger test passed:", pos_tag(["OpenVoice", "test"]))
           PY
 
       - name: Download OpenVoice V2 checkpoints
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_HUB_DISABLE_XET: '1'
         run: |
           rm -rf checkpoints_v2
           python - <<'PY'
+          import os
+          import random
+          import time
           from huggingface_hub import snapshot_download
 
-          snapshot_download(
-              repo_id="myshell-ai/OpenVoiceV2",
-              local_dir="checkpoints_v2",
-          )
+          token = os.environ.get("HF_TOKEN") or None
+          last_error = None
+          for attempt in range(1, 6):
+              try:
+                  print(f"OpenVoice checkpoint download attempt {attempt}/5")
+                  snapshot_download(
+                      repo_id="myshell-ai/OpenVoiceV2",
+                      local_dir="checkpoints_v2",
+                      token=token,
+                      resume_download=True,
+                  )
+                  last_error = None
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  if attempt == 5:
+                      raise
+                  delay = min(60, (2 ** attempt) * 5) + random.randint(0, 5)
+                  print(f"Checkpoint download failed: {exc}")
+                  print(f"Waiting {delay}s before retry...")
+                  time.sleep(delay)
+          if last_error:
+              raise last_error
           PY
           test -f checkpoints_v2/converter/config.json
           test -f checkpoints_v2/converter/checkpoint.pth
