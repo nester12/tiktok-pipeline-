@@ -51,6 +51,36 @@ jobs:
           pip install 'setuptools<81'
           python -c "import pkg_resources; print('pkg_resources available')"
 
+      - name: Install and verify MeloTTS language data
+        run: |
+          python - <<'PY'
+          import nltk
+
+          resources = [
+              "averaged_perceptron_tagger",
+              "averaged_perceptron_tagger_eng",
+              "cmudict",
+              "punkt",
+              "punkt_tab",
+          ]
+          for resource in resources:
+              print(f"Downloading NLTK resource: {resource}")
+              nltk.download(resource, download_dir="/home/runner/nltk_data", quiet=False, raise_on_error=True)
+
+          checks = [
+              "taggers/averaged_perceptron_tagger",
+              "taggers/averaged_perceptron_tagger_eng",
+              "corpora/cmudict",
+          ]
+          for path in checks:
+              nltk.data.find(path)
+              print(f"Verified: {path}")
+
+          from nltk import pos_tag
+          tagged = pos_tag(["OpenVoice", "test"])
+          print("NLTK POS tagger test passed:", tagged)
+          PY
+
       - name: Download OpenVoice V2 checkpoints
         run: |
           rm -rf checkpoints_v2
@@ -64,14 +94,22 @@ jobs:
           PY
           test -f checkpoints_v2/converter/config.json
           test -f checkpoints_v2/converter/checkpoint.pth
+          test -d checkpoints_v2/base_speakers/ses
+          ls -la checkpoints_v2/base_speakers/ses
 
       - name: Generate OpenVoice clone test
         env:
           VOICE_SOURCE_URL: 'https://drive.google.com/file/d/154LMIYT2ocStkSafa8SM8mSrbsVcpxm3/view?usp=sharing'
           VOICE_TEST_TEXT: ${{ inputs.test_text }}
+          NLTK_DATA: /home/runner/nltk_data
         run: |
           export PYTHONPATH="/tmp/OpenVoice:${PYTHONPATH}"
           python voice_test.py
+
+      - name: Verify generated voice
+        run: |
+          test -s voice_test_output.wav
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 voice_test_output.wav
 
       - name: Upload voice test
         uses: actions/upload-artifact@v4
