@@ -41,17 +41,18 @@ jobs:
 
       - name: Install OpenVoice V2 and MeloTTS
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install gdown 'Cython==0.29.36'
+          python -m pip install --upgrade pip
+          pip install 'setuptools<81' wheel gdown 'Cython==0.29.36'
           pip install 'av==10.0.0' --no-build-isolation
           git clone --depth 1 https://github.com/myshell-ai/OpenVoice.git /tmp/OpenVoice
           pip install -e /tmp/OpenVoice
           pip install git+https://github.com/myshell-ai/MeloTTS.git
           python -m unidic download
+          pip install 'setuptools<81'
+          python -c "import pkg_resources; print('pkg_resources available')"
 
       - name: Download OpenVoice V2 checkpoints
         run: |
-          python -m pip install --upgrade huggingface_hub
           rm -rf checkpoints_v2
           python - <<'PY'
           from huggingface_hub import snapshot_download
