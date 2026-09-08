@@ -58,6 +58,16 @@ def extract_reference():
     )
 
 
+def speaker_map(spk2id):
+    """Convert MeloTTS' HParams-style speaker map into a normal dictionary."""
+    if isinstance(spk2id, dict):
+        return spk2id
+    data = getattr(spk2id, "__dict__", None)
+    if isinstance(data, dict) and data:
+        return data
+    raise RuntimeError(f"Could not read MeloTTS speaker map: {type(spk2id).__name__}")
+
+
 def clone_voice():
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     converter_dir = CHECKPOINT_DIR / "converter"
@@ -78,18 +88,30 @@ def clone_voice():
 
     print("Generating natural English base speech with MeloTTS...")
     model = TTS(language="EN", device=device)
-    speaker_ids = model.hps.data.spk2id
-    preferred = next((name for name in speaker_ids if "EN-US" in name.upper()), None)
+    speaker_ids = speaker_map(model.hps.data.spk2id)
+    print(f"Available MeloTTS speakers: {list(speaker_ids.keys())}")
+
+    preferred = next(
+        (name for name in speaker_ids.keys() if "EN-US" in str(name).upper()),
+        None,
+    )
     if preferred is None:
-        preferred = next(iter(speaker_ids))
+        preferred = next(iter(speaker_ids.keys()))
+
     speaker_id = speaker_ids[preferred]
     model.tts_to_file(TEST_TEXT, speaker_id, str(BASE_WAV), speed=1.0)
 
     print(f"Converting base voice to permitted reference voice using {preferred}...")
-    source_se = torch.load(
-        CHECKPOINT_DIR / "base_speakers" / "ses" / f"{preferred.lower()}.pth",
-        map_location=device,
-    )
+    speaker_key = str(preferred).lower().replace("_", "-")
+    source_se_path = CHECKPOINT_DIR / "base_speakers" / "ses" / f"{speaker_key}.pth"
+    if not source_se_path.exists():
+        available = sorted(p.name for p in (CHECKPOINT_DIR / "base_speakers" / "ses").glob("*.pth"))
+        raise RuntimeError(
+            f"OpenVoice source speaker embedding not found: {source_se_path}. "
+            f"Available embeddings: {available}"
+        )
+
+    source_se = torch.load(source_se_path, map_location=device)
     converter.convert(
         audio_src_path=str(BASE_WAV),
         src_se=source_se,
