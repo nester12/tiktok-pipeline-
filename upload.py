@@ -145,13 +145,19 @@ def get_next_queue_slot(api_key, profile_id, queue_id):
     if resp.status_code != 200:
         raise RuntimeError(f"Could not get next Zernio queue slot (HTTP {resp.status_code}): {data}")
 
-    # Accommodate the common response wrappers used by the API/SDK.
+    # Zernio returns nextSlot directly as an ISO timestamp string.
+    next_slot = data.get("nextSlot") if isinstance(data, dict) else None
+    if next_slot and "T" in str(next_slot):
+        return str(next_slot)
+
+    # Also tolerate wrapped response formats.
     candidates = [data]
     for key in ("slot", "nextSlot", "data"):
-        if isinstance(data.get(key), dict):
-            candidates.append(data[key])
+        value = data.get(key) if isinstance(data, dict) else None
+        if isinstance(value, dict):
+            candidates.append(value)
     for item in candidates:
-        for key in ("scheduledFor", "scheduled_for", "dateTime", "datetime", "time"):
+        for key in ("scheduledFor", "scheduled_for", "dateTime", "datetime", "time", "nextSlot"):
             value = item.get(key) if isinstance(item, dict) else None
             if value and "T" in str(value):
                 return str(value)
@@ -160,9 +166,6 @@ def get_next_queue_slot(api_key, profile_id, queue_id):
 
 
 def post_to_zernio_queue(video_url, caption, api_key, account_id, profile_id, queue_id):
-    # Zernio's documented Add-to-Queue flow requires a concrete scheduledFor
-    # time plus queuedFromProfile. queueId identifies which configured queue
-    # supplies that time; it is not by itself a scheduling instruction.
     scheduled_for = get_next_queue_slot(api_key, profile_id, queue_id)
     print(f"Next queue slot: {scheduled_for}")
 
@@ -190,8 +193,6 @@ def post_to_zernio_queue(video_url, caption, api_key, account_id, profile_id, qu
     returned_time = post.get("scheduledFor") or data.get("scheduledFor")
     status = str(post.get("status") or data.get("status") or "").lower()
 
-    # Do not report success for a draft. A queued post must come back scheduled
-    # and must retain a scheduled time.
     if not post_id or not returned_time or status == "draft":
         return False, f"Zernio accepted the request but did not queue it: {data}"
 
