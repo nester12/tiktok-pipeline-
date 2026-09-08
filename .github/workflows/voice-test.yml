@@ -51,15 +51,16 @@ jobs:
 
       - name: Download OpenVoice V2 checkpoints
         run: |
-          wget -q --show-progress -O /tmp/checkpoints_v2.zip https://myshell-public-repo-host.s3.amazonaws.com/openvoice/checkpoints_v2_0417.zip
-          unzip -q /tmp/checkpoints_v2.zip -d /tmp/openvoice-checkpoints
+          python -m pip install --upgrade huggingface_hub
           rm -rf checkpoints_v2
-          if [ -d /tmp/openvoice-checkpoints/checkpoints_v2 ]; then
-            mv /tmp/openvoice-checkpoints/checkpoints_v2 ./checkpoints_v2
-          else
-            mkdir -p checkpoints_v2
-            cp -R /tmp/openvoice-checkpoints/* checkpoints_v2/
-          fi
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="myshell-ai/OpenVoiceV2",
+              local_dir="checkpoints_v2",
+          )
+          PY
           test -f checkpoints_v2/converter/config.json
           test -f checkpoints_v2/converter/checkpoint.pth
 
