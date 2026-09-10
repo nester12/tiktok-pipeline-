@@ -1,40 +1,19 @@
-# -------------------------------------------------------------------
-# Post to TikTok via Zernio's unified posting API.
-# Uses the configured profile queues in rotation:
-# Morning -> Midday -> Afternoon -> Evening -> repeat.
-# -------------------------------------------------------------------
 import os
 import sys
 import json
 import random
 import requests
 
-ZERNIO_BASE_URL = "https://zernio.com/api/v1"
-ZERNIO_POSTS_URL = f"{ZERNIO_BASE_URL}/posts"
-ZERNIO_NEXT_SLOT_URL = f"{ZERNIO_BASE_URL}/queue/next-slot"
+BUFFER_API_URL = "https://api.buffer.com"
 STORY_FILE = "story.txt"
 TRENDING_HASHTAGS_FILE = "trending_hashtags.json"
-
 ATTRIBUTION = "Background footage by GameplaysForFree, licensed under CC BY 4.0"
 DEFAULT_HASHTAGS = ["storytime", "redditstories", "fyp"]
 NUM_HASHTAGS_TO_USE = 5
 MAX_CAPTION_LENGTH = 2200
 MAX_HOOK_WORDS = 18
-
 PENDING_QUEUE_FILE = "pending_queue.json"
 QUEUE_LOG_FILE = "queue_log.json"
-QUEUE_STATE_FILE = "queue_rotation_state.json"
-
-QUEUE_ENV_ORDER = [
-    ("Morning", "ZERNIO_MORNING_QUEUE_ID"),
-    ("Midday", "ZERNIO_MIDDAY_QUEUE_ID"),
-    ("Afternoon", "ZERNIO_AFTERNOON_QUEUE_ID"),
-    ("Evening", "ZERNIO_EVENING_QUEUE_ID"),
-]
-
-
-def headers(api_key):
-    return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
 
 def build_hashtags():
@@ -50,7 +29,7 @@ def build_hashtags():
                         tags.append(tag)
         except Exception as exc:
             print(f"Could not load {TRENDING_HASHTAGS_FILE}: {exc}")
-    return " ".join(f"#{t}" for t in tags)
+    return " ".join(f"#{t}" for t in tags[:5])
 
 
 def build_caption():
@@ -82,7 +61,7 @@ def save_to_pending_queue(video_url, caption):
     print(f"Saved unposted video to backlog ({PENDING_QUEUE_FILE}).")
 
 
-def log_queued_post(video_url, due_at, queue_id=None, queue_name=None, post_id=None):
+def log_queued_post(video_url, due_at, post_id=None):
     log = []
     if os.path.exists(QUEUE_LOG_FILE):
         try:
@@ -90,151 +69,90 @@ def log_queued_post(video_url, due_at, queue_id=None, queue_name=None, post_id=N
                 log = json.load(f)
         except Exception:
             pass
-    log.append({"video_url": video_url, "due_at": due_at, "queue_id": queue_id,
-                "queue_name": queue_name, "post_id": post_id})
+    log.append({"video_url": video_url, "due_at": due_at, "provider": "buffer", "post_id": post_id})
     with open(QUEUE_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(log, f, indent=2)
 
 
-def configured_queues():
-    queues, missing = [], []
-    for name, env_name in QUEUE_ENV_ORDER:
-        queue_id = os.environ.get(env_name)
-        if queue_id:
-            queues.append((name, queue_id))
-        else:
-            missing.append(env_name)
-    if missing:
-        print(f"Missing queue secret(s): {', '.join(missing)}")
-    return queues
+def graphql_string(value):
+    return json.dumps(str(value))
 
 
-def load_rotation_index():
-    try:
-        if os.path.exists(QUEUE_STATE_FILE):
-            with open(QUEUE_STATE_FILE, "r", encoding="utf-8") as f:
-                return max(int(json.load(f).get("next_index", 0)), 0)
-    except Exception as exc:
-        print(f"Could not read queue rotation state: {exc}")
-    return 0
+def post_to_buffer_queue(video_url, caption, api_key, channel_id):
+    query = f'''mutation CreateVideoPost {{
+      createPost(input: {{
+        text: {graphql_string(caption)}
+        channelId: {graphql_string(channel_id)}
+        schedulingType: automatic
+        mode: addToQueue
+        assets: [{{ video: {{ url: {graphql_string(video_url)} }} }}]
+      }}) {{
+        ... on PostActionSuccess {{
+          post {{ id dueAt status }}
+        }}
+        ... on MutationError {{
+          message
+        }}
+      }}
+    }}'''
 
-
-def choose_next_queue():
-    queues = configured_queues()
-    if not queues:
-        return None, None
-    return queues[load_rotation_index() % len(queues)]
-
-
-def advance_queue_rotation():
-    queues = configured_queues()
-    if queues:
-        with open(QUEUE_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"next_index": (load_rotation_index() + 1) % len(queues)}, f, indent=2)
-
-
-def get_next_queue_slot(api_key, profile_id, queue_id):
-    """Ask Zernio for the next available time in the selected queue."""
-    params = {"profileId": profile_id, "queueId": queue_id}
-    resp = requests.get(ZERNIO_NEXT_SLOT_URL, headers=headers(api_key), params=params, timeout=60)
+    resp = requests.post(
+        BUFFER_API_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"query": query},
+        timeout=60,
+    )
     try:
         data = resp.json()
     except Exception:
         data = {"raw": resp.text}
 
     if resp.status_code != 200:
-        raise RuntimeError(f"Could not get next Zernio queue slot (HTTP {resp.status_code}): {data}")
+        return False, f"Buffer HTTP {resp.status_code}: {data}"
+    if data.get("errors"):
+        return False, f"Buffer GraphQL error: {data['errors']}"
 
-    # Zernio returns nextSlot directly as an ISO timestamp string.
-    next_slot = data.get("nextSlot") if isinstance(data, dict) else None
-    if next_slot and "T" in str(next_slot):
-        return str(next_slot)
+    result = data.get("data", {}).get("createPost")
+    if not isinstance(result, dict):
+        return False, f"Buffer returned no createPost result: {data}"
+    if result.get("message") and not result.get("post"):
+        return False, result["message"]
 
-    # Also tolerate wrapped response formats.
-    candidates = [data]
-    for key in ("slot", "nextSlot", "data"):
-        value = data.get(key) if isinstance(data, dict) else None
-        if isinstance(value, dict):
-            candidates.append(value)
-    for item in candidates:
-        for key in ("scheduledFor", "scheduled_for", "dateTime", "datetime", "time", "nextSlot"):
-            value = item.get(key) if isinstance(item, dict) else None
-            if value and "T" in str(value):
-                return str(value)
+    post = result.get("post")
+    if not isinstance(post, dict) or not post.get("id"):
+        return False, f"Buffer did not create a queued post: {data}"
 
-    raise RuntimeError(f"Zernio returned no usable next queue time: {data}")
-
-
-def post_to_zernio_queue(video_url, caption, api_key, account_id, profile_id, queue_id):
-    scheduled_for = get_next_queue_slot(api_key, profile_id, queue_id)
-    print(f"Next queue slot: {scheduled_for}")
-
-    payload = {
-        "platforms": [{"platform": "tiktok", "accountId": account_id}],
-        "content": caption,
-        "mediaItems": [{"type": "video", "url": video_url}],
-        "scheduledFor": scheduled_for,
-        "queuedFromProfile": profile_id,
-        "queueId": queue_id,
+    return True, {
+        "post_id": post["id"],
+        "scheduled_for": post.get("dueAt"),
+        "status": post.get("status") or "scheduled",
     }
-    print(f"Adding TikTok video to Zernio queue {queue_id} for {scheduled_for}.")
-    resp = requests.post(ZERNIO_POSTS_URL, headers=headers(api_key), json=payload, timeout=60)
-    try:
-        data = resp.json()
-    except Exception:
-        data = {"raw": resp.text}
-    print(data)
-
-    if resp.status_code not in (200, 201):
-        return False, data.get("error") or data.get("message") or f"HTTP {resp.status_code}: {data}"
-
-    post = data.get("post") if isinstance(data.get("post"), dict) else data
-    post_id = post.get("_id") or post.get("id") or post.get("postId")
-    returned_time = post.get("scheduledFor") or data.get("scheduledFor")
-    status = str(post.get("status") or data.get("status") or "").lower()
-
-    if not post_id or not returned_time or status == "draft":
-        return False, f"Zernio accepted the request but did not queue it: {data}"
-
-    return True, {"post_id": post_id, "scheduled_for": returned_time,
-                  "queue_id": queue_id, "status": status or "scheduled"}
 
 
 def main():
-    api_key = os.environ.get("ZERNIO_API_KEY")
-    account_id = os.environ.get("ZERNIO_TIKTOK_ACCOUNT_ID")
-    profile_id = os.environ.get("ZERNIO_PROFILE_ID")
+    api_key = os.environ.get("BUFFER_API_KEY")
+    channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
     video_url = os.environ.get("VIDEO_URL")
 
     missing = [name for name, val in [
-        ("ZERNIO_API_KEY", api_key),
-        ("ZERNIO_TIKTOK_ACCOUNT_ID", account_id),
-        ("ZERNIO_PROFILE_ID", profile_id),
+        ("BUFFER_API_KEY", api_key),
+        ("BUFFER_TIKTOK_CHANNEL_ID", channel_id),
         ("VIDEO_URL", video_url),
     ] if not val]
     if missing:
         raise ValueError(f"Missing required environment variable(s): {', '.join(missing)}")
 
-    queue_name, queue_id = choose_next_queue()
-    if not queue_id:
-        raise ValueError("No Zernio queue IDs are configured. Add the four queue ID secrets.")
-    print(f"Next Zernio queue: {queue_name}")
-
     caption = build_caption()
     try:
-        success, result = post_to_zernio_queue(video_url, caption, api_key, account_id,
-                                                profile_id, queue_id)
+        success, result = post_to_buffer_queue(video_url, caption, api_key, channel_id)
     except Exception as exc:
         success, result = False, str(exc)
 
     if success:
-        print(f"SUCCESS — queued post {result['post_id']} | status {result['status']} | "
-              f"scheduled for {result['scheduled_for']} | queue {queue_name}")
-        log_queued_post(video_url, result["scheduled_for"], result["queue_id"],
-                        queue_name, result["post_id"])
-        advance_queue_rotation()
+        print(f"SUCCESS — Buffer queued post {result['post_id']} | status {result['status']} | scheduled for {result['scheduled_for']}")
+        log_queued_post(video_url, result["scheduled_for"], result["post_id"])
     else:
-        print(f"Zernio did not queue the post: {result}")
+        print(f"Buffer did not queue the post: {result}")
         save_to_pending_queue(video_url, caption)
         sys.exit(1)
 
