@@ -2,8 +2,6 @@ name: content-pipeline
 
 on:
   schedule:
-    # GitHub cron uses UTC. Running at both 05:00 and 06:00 lets the
-    # timezone check below keep this at 06:00 Europe/London through DST.
     - cron: '0 5 * * *'
     - cron: '0 6 * * *'
   workflow_dispatch:
@@ -51,13 +49,8 @@ jobs:
       - name: Retry any backlogged videos first
         if: steps.uk_time.outputs.should_run == 'true'
         env:
-          ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
-          ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
-          ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
-          ZERNIO_MORNING_QUEUE_ID: ${{ secrets.ZERNIO_MORNING_QUEUE_ID }}
-          ZERNIO_MIDDAY_QUEUE_ID: ${{ secrets.ZERNIO_MIDDAY_QUEUE_ID }}
-          ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
-          ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
         run: python retry_pending.py
 
       - name: Generate and queue all 4 daily videos sequentially
@@ -68,13 +61,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
-          ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
-          ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
-          ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
-          ZERNIO_MORNING_QUEUE_ID: ${{ secrets.ZERNIO_MORNING_QUEUE_ID }}
-          ZERNIO_MIDDAY_QUEUE_ID: ${{ secrets.ZERNIO_MIDDAY_QUEUE_ID }}
-          ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
-          ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
         run: |
           set -euo pipefail
 
@@ -84,8 +72,6 @@ jobs:
             echo "Creating video ${video_number}/4 as a complete pipeline"
             echo "============================================================"
 
-            # Remove generated media from the previous video so nothing can be
-            # accidentally reused by the next pipeline cycle.
             rm -f video_url.txt audio_meta.json narration.wav narration_raw.wav timestamps.json final_short.mp4 background.mp4 story.txt
 
             echo "[${video_number}/4] 1/5 Fetching a fresh background"
@@ -105,7 +91,7 @@ jobs:
               return 1
             fi
 
-            echo "[${video_number}/4] 5/5 Sending this video to its Zernio queue"
+            echo "[${video_number}/4] 5/5 Adding this video to the Buffer TikTok queue"
             export VIDEO_URL="$(cat video_url.txt)"
             python upload.py
 
@@ -125,7 +111,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pending_queue.json queue_log.json queue_rotation_state.json recent_story_topics.json recent_backgrounds.json 2>/dev/null || true
+          git add pending_queue.json queue_log.json recent_story_topics.json recent_backgrounds.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No state changes to commit."
             exit 0
