@@ -1,27 +1,15 @@
-# -------------------------------------------------------------------
-# Retry videos left in the backlog from previous runs.
-# Uses the same four-queue rotation as new posts.
-# -------------------------------------------------------------------
 import os
 import json
 
-from upload import (
-    PENDING_QUEUE_FILE,
-    advance_queue_rotation,
-    choose_next_queue,
-    load_pending_queue,
-    log_queued_post,
-    post_to_zernio_queue,
-)
+from upload import PENDING_QUEUE_FILE, load_pending_queue, log_queued_post, post_to_buffer_queue
 
 
 def main():
-    api_key = os.environ.get("ZERNIO_API_KEY")
-    account_id = os.environ.get("ZERNIO_TIKTOK_ACCOUNT_ID")
-    profile_id = os.environ.get("ZERNIO_PROFILE_ID")
+    api_key = os.environ.get("BUFFER_API_KEY")
+    channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
 
-    if not api_key or not account_id or not profile_id:
-        print("Missing Zernio credentials/profile — skipping backlog retry.")
+    if not api_key or not channel_id:
+        print("Missing Buffer API key/channel — skipping backlog retry.")
         return
 
     queue = load_pending_queue()
@@ -29,43 +17,20 @@ def main():
         print("No pending videos in backlog.")
         return
 
-    print(f"Found {len(queue)} video(s) in backlog — retrying...")
+    print(f"Found {len(queue)} video(s) in backlog — retrying with Buffer...")
     still_pending = []
 
     for index, item in enumerate(queue):
-        queue_name, queue_id = choose_next_queue()
-        if not queue_id:
-            print("No Zernio queue ID available — keeping remaining backlog.")
-            still_pending.extend(queue[index:])
-            break
-
-        print(f"Backlog post using queue: {queue_name}")
-
         try:
-            success, result = post_to_zernio_queue(
-                item["video_url"],
-                item["caption"],
-                api_key,
-                account_id,
-                profile_id,
-                queue_id,
+            success, result = post_to_buffer_queue(
+                item["video_url"], item["caption"], api_key, channel_id
             )
         except Exception as exc:
             success, result = False, str(exc)
 
         if success:
-            print(
-                f"Backlog video queued — post {result['post_id']} | "
-                f"scheduled for {result['scheduled_for']} | queue {queue_name}"
-            )
-            log_queued_post(
-                item["video_url"],
-                result["scheduled_for"],
-                result["queue_id"],
-                queue_name,
-                result["post_id"],
-            )
-            advance_queue_rotation()
+            print(f"Backlog video queued in Buffer — post {result['post_id']} | scheduled for {result['scheduled_for']}")
+            log_queued_post(item["video_url"], result["scheduled_for"], result["post_id"])
         else:
             result_text = str(result)
             print(f"Still couldn't queue ({result_text}) — keeping in backlog.")
@@ -77,10 +42,7 @@ def main():
     with open(PENDING_QUEUE_FILE, "w", encoding="utf-8") as f:
         json.dump(still_pending, f, indent=2)
 
-    print(
-        f"Backlog result: {len(queue) - len(still_pending)} queued, "
-        f"{len(still_pending)} still pending."
-    )
+    print(f"Backlog result: {len(queue) - len(still_pending)} queued, {len(still_pending)} still pending.")
 
 
 if __name__ == "__main__":
