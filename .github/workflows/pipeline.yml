@@ -2,8 +2,8 @@ name: content-pipeline
 
 on:
   schedule:
-    - cron: '0 5 * * *'
     - cron: '0 6 * * *'
+      timezone: 'Europe/London'
   workflow_dispatch:
 
 permissions:
@@ -17,44 +17,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check whether this is 06:00 UK time
-        id: uk_time
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Manual run requested — continuing."
-          elif [ "$(TZ=Europe/London date +%H)" = "06" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "It is 06:00 in Europe/London — starting daily batch."
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Not 06:00 in Europe/London — skipping duplicate DST trigger."
-          fi
-
       - name: Set up Python
-        if: steps.uk_time.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install system audio deps
-        if: steps.uk_time.outputs.should_run == 'true'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
 
       - name: Install Python deps
-        if: steps.uk_time.outputs.should_run == 'true'
         run: pip install -r requirements.txt
 
       - name: Retry any backlogged videos first
-        if: steps.uk_time.outputs.should_run == 'true'
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
         run: python retry_pending.py
 
       - name: Generate and queue all 4 daily videos sequentially
-        if: steps.uk_time.outputs.should_run == 'true'
         shell: bash
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -106,7 +86,7 @@ jobs:
           echo "All four independent video pipelines completed."
 
       - name: Commit pipeline state changes
-        if: always() && steps.uk_time.outputs.should_run == 'true'
+        if: always()
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
