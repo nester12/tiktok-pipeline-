@@ -23,13 +23,12 @@ KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "am_michael")
 KOKORO_LANG = os.environ.get("KOKORO_LANG", "a")
 KOKORO_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 
-# Aim around 90 seconds, but preserve a complete story when it naturally lands
-# anywhere in this range. A 90-second story should not be regenerated merely
-# to hit an exact duration.
-TARGET_DURATION = 90
-MIN_DURATION = 65
-MAX_SINGLE_DURATION = 119
-MAX_STORY_RETRIES = 2
+# Defaults keep the production pipeline unchanged. Preview/test workflows can
+# override these with environment variables without affecting normal runs.
+TARGET_DURATION = float(os.environ.get("TARGET_DURATION", "90"))
+MIN_DURATION = float(os.environ.get("MIN_DURATION", "65"))
+MAX_SINGLE_DURATION = float(os.environ.get("MAX_SINGLE_DURATION", "119"))
+MAX_STORY_RETRIES = int(os.environ.get("MAX_STORY_RETRIES", "2"))
 SAMPLE_RATE = 24000
 JOIN_PAUSE_MS = 45
 
@@ -63,7 +62,6 @@ def get_target_wpm():
         try:
             with open(TARGET_PACE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # median is more resistant to unusually fast viral clips than avg.
             candidate = data.get("target_wpm") or data.get("avg_wpm")
             if candidate and 115 <= float(candidate) <= 175:
                 print(f"🎯 Using learned narration pace: {float(candidate):.0f} WPM")
@@ -101,7 +99,6 @@ def _to_numpy(audio):
 def prepare_for_tts(text):
     """Light cleanup only; keep the author's punctuation/prosody intact."""
     text = " ".join(text.replace("\n", " ").split())
-    text = text.replace("...", "…")
     return text.strip()
 
 
@@ -158,7 +155,7 @@ def master_audio(input_path, output_path):
 
 
 def synthesize_naturally(story_text):
-    raw_duration = generate_raw_voiceover(story_text)
+    generate_raw_voiceover(story_text)
     master_audio(RAW_AUDIO_FILE, AUDIO_FILE)
     final_duration = get_duration(AUDIO_FILE)
     word_count = len(story_text.split())
@@ -202,6 +199,7 @@ def save_audio_meta(story_text, duration, measured_wpm):
             "measured_wpm": round(measured_wpm, 1),
             "voice": KOKORO_VOICE,
             "speed": KOKORO_SPEED,
+            "target_duration": TARGET_DURATION,
             "complete_single_video": duration < 120,
         }, f, indent=2)
 
@@ -209,20 +207,22 @@ def save_audio_meta(story_text, duration, measured_wpm):
 def main():
     ensure_ffmpeg()
     target_wpm = get_target_wpm()
-    base_word_target = int(round(target_wpm * TARGET_DURATION / 60))
+    base_word_target = max(45, int(round(target_wpm * TARGET_DURATION / 60)))
 
     story_text = None
     duration = None
     measured_wpm = None
 
-    # Generate a story once and preserve it whenever it is a complete 65-119s
-    # narration. Only retry generation if it is actually too short/long.
     for attempt in range(1, MAX_STORY_RETRIES + 1):
         word_target = base_word_target
         if attempt > 1 and duration:
             scale = TARGET_DURATION / max(duration, 1)
             word_target = int(round(len(story_text.split()) * scale))
-            word_target = max(170, min(330, word_target))
+            # This also works for short preview stories instead of forcing them
+            # back to the production-only 170+ word range.
+            lower_bound = max(40, int(base_word_target * 0.65))
+            upper_bound = max(lower_bound + 20, int(base_word_target * 1.45))
+            word_target = max(lower_bound, min(upper_bound, word_target))
 
         print(f"\n🔁 Story/audio attempt {attempt}/{MAX_STORY_RETRIES} — target {word_target} words")
         story_text = generate_story(word_target=word_target, niche=None)
@@ -233,12 +233,12 @@ def main():
         print(f"⏱️ Final audio duration: {duration:.1f}s")
 
         if MIN_DURATION <= duration <= MAX_SINGLE_DURATION:
-            print("✅ Complete story fits a single video; keeping it unchanged.")
+            print("✅ Complete story fits the requested video length; keeping it unchanged.")
             break
         if duration < MIN_DURATION:
-            print("⚠️ Story is too short for the target format; requesting one longer version.")
+            print("⚠️ Story is too short for the requested format; requesting one longer version.")
         else:
-            print("⚠️ Story exceeds two minutes; requesting one tighter version rather than speeding the voice.")
+            print("⚠️ Story is too long for the requested format; requesting one tighter version.")
     else:
         print("⚠️ Using the final natural narration after retry limit.")
 
