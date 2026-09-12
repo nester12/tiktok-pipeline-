@@ -23,12 +23,8 @@ jobs:
         run: python fetch_background.py
 
       - name: Generate one 30-second preview story + voiceover + timestamps
-        run: python generate_audio.py
+        run: python preview_30s.py
         env:
-          TARGET_DURATION: '30'
-          MIN_DURATION: '24'
-          MAX_SINGLE_DURATION: '38'
-          MAX_STORY_RETRIES: '2'
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
