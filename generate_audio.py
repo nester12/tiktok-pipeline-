@@ -1,13 +1,15 @@
 # -------------------------------------------------------------------
-# Generate TTS Voiceover (Kokoro)
+# Generate TTS Voiceover (Inworld Adam primary, Kokoro legacy fallback)
 # -------------------------------------------------------------------
 
+import base64
 import json
 import os
 import shutil
 import subprocess
 
 import numpy as np
+import requests
 import soundfile as sf
 
 from generate_story import generate_story
@@ -18,6 +20,11 @@ AUDIO_FILE = "narration.wav"
 JSON_FILE = "timestamps.json"
 TARGET_PACE_FILE = "target_pace.json"
 AUDIO_META_FILE = "audio_meta.json"
+
+INWORLD_API_BASE = "https://api.inworld.ai"
+INWORLD_VOICE_NAME = os.environ.get("INWORLD_VOICE_NAME", "Adam")
+INWORLD_VOICE_ID = os.environ.get("INWORLD_VOICE_ID", "").strip()
+INWORLD_MODEL = os.environ.get("INWORLD_MODEL", "inworld-tts-2")
 
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "am_michael")
 KOKORO_LANG = os.environ.get("KOKORO_LANG", "a")
@@ -33,6 +40,9 @@ SAMPLE_RATE = 24000
 JOIN_PAUSE_MS = 45
 
 _pipeline = None
+_active_voice_name = None
+_active_voice_id = None
+_active_tts_provider = None
 
 
 def ensure_ffmpeg():
@@ -72,7 +82,127 @@ def get_target_wpm():
     return default_wpm
 
 
-def get_pipeline():
+def prepare_for_tts(text):
+    """Keep the generated spoken punctuation intact for the TTS engine."""
+    return " ".join(text.replace("\n", " ").split()).strip()
+
+
+def resolve_inworld_voice_id(api_key):
+    """Find the user's Inworld voice named Adam unless an explicit ID is supplied."""
+    if INWORLD_VOICE_ID:
+        print(f"🎙️ Using configured Inworld voice ID for {INWORLD_VOICE_NAME}.")
+        return INWORLD_VOICE_ID
+
+    response = requests.get(
+        f"{INWORLD_API_BASE}/voices/v1/voices",
+        headers={"Authorization": f"Basic {api_key}"},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Could not list Inworld voices (HTTP {response.status_code}): {response.text[:500]}"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Inworld voice list returned invalid JSON.") from exc
+
+    voices = payload.get("voices", []) if isinstance(payload, dict) else []
+    target = INWORLD_VOICE_NAME.casefold().strip()
+
+    exact_display_matches = []
+    exact_id_matches = []
+    for voice in voices:
+        if not isinstance(voice, dict):
+            continue
+        voice_id = str(voice.get("voiceId") or voice.get("voice_id") or "").strip()
+        display_name = str(
+            voice.get("displayName")
+            or voice.get("display_name")
+            or voice.get("name")
+            or ""
+        ).strip()
+
+        if display_name.casefold() == target and voice_id:
+            exact_display_matches.append((voice_id, display_name))
+        if voice_id.casefold() == target and voice_id:
+            exact_id_matches.append((voice_id, display_name or voice_id))
+
+    matches = exact_display_matches or exact_id_matches
+    if not matches:
+        visible_names = []
+        for voice in voices[:40]:
+            if isinstance(voice, dict):
+                name = voice.get("displayName") or voice.get("display_name") or voice.get("name")
+                if name:
+                    visible_names.append(str(name))
+        hint = ", ".join(visible_names[:20]) or "no voice names returned"
+        raise RuntimeError(
+            f"Inworld voice '{INWORLD_VOICE_NAME}' was not found in this API key's voice library. "
+            f"Voices returned included: {hint}"
+        )
+
+    voice_id, display_name = matches[0]
+    print(f"✅ Found Inworld voice '{display_name}' (voiceId={voice_id}).")
+    return voice_id
+
+
+def generate_inworld_voiceover(story_text, api_key):
+    global _active_voice_name, _active_voice_id, _active_tts_provider
+
+    spoken_text = prepare_for_tts(story_text)
+    if len(spoken_text) > 1950:
+        raise RuntimeError(
+            f"Story is {len(spoken_text)} characters; Inworld single-request narration is limited to about 2000 characters."
+        )
+
+    voice_id = resolve_inworld_voice_id(api_key)
+    print(f"🎙️ Inworld '{INWORLD_VOICE_NAME}' using {INWORLD_MODEL}...")
+
+    response = requests.post(
+        f"{INWORLD_API_BASE}/tts/v1/voice",
+        headers={
+            "Authorization": f"Basic {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "text": spoken_text,
+            "voiceId": voice_id,
+            "modelId": INWORLD_MODEL,
+            "audioConfig": {
+                "audioEncoding": "WAV",
+                "sampleRateHertz": SAMPLE_RATE,
+            },
+        },
+        timeout=90,
+    )
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Inworld TTS failed (HTTP {response.status_code}): {response.text[:800]}"
+        )
+
+    try:
+        data = response.json()
+        encoded_audio = data["audioContent"]
+        audio_bytes = base64.b64decode(encoded_audio)
+    except Exception as exc:
+        raise RuntimeError(f"Inworld returned unusable audio data: {response.text[:500]}") from exc
+
+    if not audio_bytes:
+        raise RuntimeError("Inworld returned empty audio.")
+
+    with open(RAW_AUDIO_FILE, "wb") as f:
+        f.write(audio_bytes)
+
+    _active_voice_name = INWORLD_VOICE_NAME
+    _active_voice_id = voice_id
+    _active_tts_provider = "inworld"
+    return get_duration(RAW_AUDIO_FILE)
+
+
+def get_kokoro_pipeline():
     global _pipeline
     if _pipeline is not None:
         return _pipeline
@@ -96,14 +226,10 @@ def _to_numpy(audio):
     return audio
 
 
-def prepare_for_tts(text):
-    """Light cleanup only; keep the author's punctuation/prosody intact."""
-    text = " ".join(text.replace("\n", " ").split())
-    return text.strip()
+def generate_kokoro_voiceover(story_text):
+    global _active_voice_name, _active_voice_id, _active_tts_provider
 
-
-def generate_raw_voiceover(story_text):
-    pipeline = get_pipeline()
+    pipeline = get_kokoro_pipeline()
     spoken_text = prepare_for_tts(story_text)
     print(f"🎙️ Kokoro '{KOKORO_VOICE}' at {KOKORO_SPEED:.2f}x...")
 
@@ -134,7 +260,24 @@ def generate_raw_voiceover(story_text):
 
     full_audio = np.concatenate(audio_parts)
     sf.write(RAW_AUDIO_FILE, full_audio, SAMPLE_RATE)
+    _active_voice_name = KOKORO_VOICE
+    _active_voice_id = KOKORO_VOICE
+    _active_tts_provider = "kokoro"
     return get_duration(RAW_AUDIO_FILE)
+
+
+def generate_raw_voiceover(story_text):
+    """Use Inworld Adam whenever INWORLD_API_KEY is configured.
+
+    If the user configured Inworld, do not silently switch to another voice on
+    failure. A wrong narrator is worse than a visible workflow failure.
+    """
+    inworld_key = os.environ.get("INWORLD_API_KEY", "").strip()
+    if inworld_key:
+        return generate_inworld_voiceover(story_text, inworld_key)
+
+    print("⚠️ INWORLD_API_KEY is not configured — using legacy Kokoro narration.")
+    return generate_kokoro_voiceover(story_text)
 
 
 def master_audio(input_path, output_path):
@@ -197,8 +340,10 @@ def save_audio_meta(story_text, duration, measured_wpm):
             "duration_seconds": round(duration, 2),
             "word_count": len(story_text.split()),
             "measured_wpm": round(measured_wpm, 1),
-            "voice": KOKORO_VOICE,
-            "speed": KOKORO_SPEED,
+            "tts_provider": _active_tts_provider,
+            "voice": _active_voice_name,
+            "voice_id": _active_voice_id,
+            "model": INWORLD_MODEL if _active_tts_provider == "inworld" else None,
             "target_duration": TARGET_DURATION,
             "complete_single_video": duration < 120,
         }, f, indent=2)
@@ -218,8 +363,6 @@ def main():
         if attempt > 1 and duration:
             scale = TARGET_DURATION / max(duration, 1)
             word_target = int(round(len(story_text.split()) * scale))
-            # This also works for short preview stories instead of forcing them
-            # back to the production-only 170+ word range.
             lower_bound = max(40, int(base_word_target * 0.65))
             upper_bound = max(lower_bound + 20, int(base_word_target * 1.45))
             word_target = max(lower_bound, min(upper_bound, word_target))
@@ -244,7 +387,10 @@ def main():
 
     generate_word_timestamps(AUDIO_FILE)
     save_audio_meta(story_text, duration, measured_wpm)
-    print(f"✅ Finished: {len(story_text.split())} words | {duration:.1f}s | voice={KOKORO_VOICE}")
+    print(
+        f"✅ Finished: {len(story_text.split())} words | {duration:.1f}s | "
+        f"provider={_active_tts_provider} | voice={_active_voice_name}"
+    )
 
 
 if __name__ == "__main__":
