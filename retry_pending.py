@@ -1,15 +1,15 @@
 import os
 import json
 
-from upload import PENDING_QUEUE_FILE, load_pending_queue, log_queued_post, post_to_buffer_queue
+from upload import PENDING_QUEUE_FILE, load_pending_queue, log_queued_post, post_to_buffer_queue, get_buffer_credential
 
 
 def main():
-    api_key = os.environ.get("BUFFER_API_KEY")
+    api_key = get_buffer_credential()
     channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
 
     if not api_key or not channel_id:
-        print("Missing Buffer API key/channel — skipping backlog retry.")
+        print("Missing Buffer credential/channel — skipping backlog retry.")
         return
 
     queue = load_pending_queue()
