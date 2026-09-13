@@ -78,6 +78,10 @@ def graphql_string(value):
     return json.dumps(str(value))
 
 
+def get_buffer_credential():
+    return (os.environ.get("BUFFER_API_KEY") or os.environ.get("BUFFER_ACCESS_TOKEN") or "").strip()
+
+
 def post_to_buffer_queue(video_url, caption, api_key, channel_id):
     query = f'''mutation CreateVideoPost {{
       createPost(input: {{
@@ -130,12 +134,12 @@ def post_to_buffer_queue(video_url, caption, api_key, channel_id):
 
 
 def main():
-    api_key = os.environ.get("BUFFER_API_KEY")
+    api_key = get_buffer_credential()
     channel_id = os.environ.get("BUFFER_TIKTOK_CHANNEL_ID")
     video_url = os.environ.get("VIDEO_URL")
 
     missing = [name for name, val in [
-        ("BUFFER_API_KEY", api_key),
+        ("BUFFER_API_KEY or BUFFER_ACCESS_TOKEN", api_key),
         ("BUFFER_TIKTOK_CHANNEL_ID", channel_id),
         ("VIDEO_URL", video_url),
     ] if not val]
