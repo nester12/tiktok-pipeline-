@@ -11,8 +11,7 @@ jobs:
       - name: Download a small sample video
         run: |
           curl -L -o final_short.mp4 "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4"
-          ls -la final_short.mp4
-          file final_short.mp4
+          test -s final_short.mp4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,6 +21,24 @@ jobs:
       - name: Install deps
         run: pip install requests
 
+      - name: Check required posting secrets
+        shell: bash
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
+        run: |
+          set -euo pipefail
+          test -n "$BUFFER_TIKTOK_CHANNEL_ID" || { echo "Missing BUFFER_TIKTOK_CHANNEL_ID"; exit 1; }
+          test -n "$CLOUDINARY_CLOUD_NAME" || { echo "Missing CLOUDINARY_CLOUD_NAME"; exit 1; }
+          test -n "$CLOUDINARY_UPLOAD_PRESET" || { echo "Missing CLOUDINARY_UPLOAD_PRESET"; exit 1; }
+          if [ -z "$BUFFER_API_KEY" ] && [ -z "$BUFFER_ACCESS_TOKEN" ]; then
+            echo "Missing Buffer credential: set BUFFER_API_KEY or BUFFER_ACCESS_TOKEN"
+            exit 1
+          fi
+
       - name: Host video on Cloudinary
         id: host_video
         run: python upload_to_cloudinary.py
@@ -29,22 +46,12 @@ jobs:
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
 
-      - name: Verify hosted video URL
-        shell: bash
-        run: |
-          test -s video_url.txt
-          echo "Cloudinary URL created successfully."
-
-      - name: Add test video to Zernio queue
+      - name: Add test video to Buffer queue
         shell: bash
         env:
-          ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
-          ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
-          ZERNIO_PROFILE_ID: ${{ secrets.ZERNIO_PROFILE_ID }}
-          ZERNIO_MORNING_QUEUE_ID: ${{ secrets.ZERNIO_MORNING_QUEUE_ID }}
-          ZERNIO_MIDDAY_QUEUE_ID: ${{ secrets.ZERNIO_MIDDAY_QUEUE_ID }}
-          ZERNIO_AFTERNOON_QUEUE_ID: ${{ secrets.ZERNIO_AFTERNOON_QUEUE_ID }}
-          ZERNIO_EVENING_QUEUE_ID: ${{ secrets.ZERNIO_EVENING_QUEUE_ID }}
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
         run: |
           set -euo pipefail
           export VIDEO_URL="$(cat video_url.txt)"
