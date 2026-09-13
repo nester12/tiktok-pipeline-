@@ -19,30 +19,49 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Fetch background video (from Google Drive)
+      - name: Check required preview secrets
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GEMINI_API_KEY" ] && [ -z "$GROQ_API_KEY" ]; then
+            echo "Missing story provider: set GEMINI_API_KEY or GROQ_API_KEY"
+            exit 1
+          fi
+          test -n "$CLOUDINARY_CLOUD_NAME" || { echo "Missing CLOUDINARY_CLOUD_NAME"; exit 1; }
+          test -n "$CLOUDINARY_UPLOAD_PRESET" || { echo "Missing CLOUDINARY_UPLOAD_PRESET"; exit 1; }
+          test -n "$GMAIL_ADDRESS" || { echo "Missing GMAIL_ADDRESS"; exit 1; }
+          test -n "$GMAIL_APP_PASSWORD" || { echo "Missing GMAIL_APP_PASSWORD"; exit 1; }
+          test -n "$EMAIL_TO" || { echo "Missing EMAIL_TO"; exit 1; }
+
+      - name: Fetch background video
         run: python fetch_background.py
 
-      - name: Generate one 30-second preview story + voiceover + timestamps
+      - name: Generate one 30-second preview story + Kokoro voiceover + timestamps
         run: python preview_30s.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          META1_API_KEY: ${{ secrets.META1_API_KEY }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          KOKORO_VOICE: am_michael
 
       - name: Render video
         run: python render_video.py
 
-      - name: Host video on Cloudinary (public URL)
+      - name: Host video on Cloudinary
         id: host_video
         run: python upload_to_cloudinary.py
         env:
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
 
-      - name: Email video link for review (no posting)
+      - name: Email video link for review
         run: python email_preview.py
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
