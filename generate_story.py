@@ -10,7 +10,7 @@ TREND_SUMMARY_FILE = "trend_summary.json"
 RECENT_TOPICS_FILE = "recent_story_topics.json"
 STYLE_NOTES_FILE = "style_notes.txt"
 
-GEMINI_MODEL = os.environ.get("GEMINI_STORY_MODEL", "gemini-3.7-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_STORY_MODEL", "gemini-2.5-flash")
 GROQ_MODEL = os.environ.get("GROQ_STORY_MODEL", "openai/gpt-oss-120b")
 GROQ_FALLBACK_MODEL = os.environ.get("GROQ_STORY_FALLBACK_MODEL", "openai/gpt-oss-20b")
 REQUEST_TIMEOUT = 90
