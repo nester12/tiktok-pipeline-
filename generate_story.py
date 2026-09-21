@@ -10,7 +10,7 @@ TREND_SUMMARY_FILE = "trend_summary.json"
 RECENT_TOPICS_FILE = "recent_story_topics.json"
 STYLE_NOTES_FILE = "style_notes.txt"
 
-GEMINI_MODEL = os.environ.get("GEMINI_STORY_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_STORY_MODEL", "gemini-2.5-flash")
 GROQ_MODEL = os.environ.get("GROQ_STORY_MODEL", "openai/gpt-oss-120b")
 GROQ_FALLBACK_MODEL = os.environ.get("GROQ_STORY_FALLBACK_MODEL", "openai/gpt-oss-20b")
 REQUEST_TIMEOUT = 90
@@ -270,53 +270,55 @@ def generate_with_groq_model(api_key, prompt, model):
             continue
         break
 
-    raise RuntimeError(f"{model} failed: {last_error}")
+    raise RuntimeError(f"Groq {model} failed: {last_error}")
 
 
-def generate_story(word_target=240, niche=None):
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    groq_key = os.environ.get("GROQ_API_KEY")
-    if niche is None:
-        niche = select_story_niche()
-
-    prompt = build_prompt(niche, word_target)
-    print(f"Niche: {niche} | target words: {word_target}")
-    failures = []
+def generate_story(prompt):
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+    errors = []
 
     if gemini_key:
         try:
-            story = generate_with_gemini(gemini_key, prompt)
-            print(f"Story generated with Gemini ({GEMINI_MODEL}).")
-            return " ".join(story.strip().splitlines())
+            print(f"Generating story with Gemini ({GEMINI_MODEL})...")
+            return generate_with_gemini(gemini_key, prompt)
         except Exception as exc:
-            failures.append(f"Gemini: {exc}")
+            errors.append(str(exc))
             print(f"Gemini generation failed: {exc}")
-    else:
-        failures.append("Gemini: GEMINI_API_KEY missing")
 
     if groq_key:
-        for model in dict.fromkeys([GROQ_MODEL, GROQ_FALLBACK_MODEL]):
-            if not model:
-                continue
+        for model in [GROQ_MODEL, GROQ_FALLBACK_MODEL]:
             try:
-                story = generate_with_groq_model(groq_key, prompt, model)
-                print(f"Story generated with Groq ({model}).")
-                return " ".join(story.strip().splitlines())
+                print(f"Generating story with Groq ({model})...")
+                return generate_with_groq_model(groq_key, prompt, model)
             except Exception as exc:
-                failures.append(f"Groq {model}: {exc}")
-                print(f"Groq {model} failed: {exc}")
-    else:
-        failures.append("Groq: GROQ_API_KEY missing")
+                errors.append(str(exc))
+                print(f"Groq generation failed: {exc}")
 
-    details = "\n".join(f"- {x}" for x in failures)
-    raise RuntimeError(f"All configured story-generation providers failed.\n{details}")
+    raise RuntimeError("All story generation providers failed: " + " | ".join(errors))
+
+
+def clean_story(text):
+    text = text.strip()
+    if text.startswith("```") and text.endswith("```"):
+        text = text.strip("`").strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return " ".join(lines)
 
 
 def main():
-    story_text = generate_story()
+    word_target = int(os.environ.get("STORY_WORD_TARGET", "205"))
+    niche = select_story_niche()
+    prompt = build_prompt(niche, word_target)
+    story = clean_story(generate_story(prompt))
+
+    if not story:
+        raise RuntimeError("Story generation returned no text")
+
     with open(STORY_OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(story_text)
-    print(f"Story saved to {STORY_OUTPUT_FILE} ({len(story_text.split())} words)")
+        f.write(story + "\n")
+
+    print(f"Story generated: {len(story.split())} words")
 
 
 if __name__ == "__main__":
