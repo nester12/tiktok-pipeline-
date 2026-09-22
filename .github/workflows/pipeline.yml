@@ -38,7 +38,7 @@ jobs:
         shell: bash
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_STORY_MODEL: 'gemini-3.8-flash'
+          GEMINI_STORY_MODEL: 'gemini-flash-latest'
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
           INWORLD_VOICE_NAME: 'Storyteller'
