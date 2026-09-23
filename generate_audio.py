@@ -10,7 +10,7 @@ import subprocess
 import numpy as np
 import soundfile as sf
 
-from generate_story import generate_story
+from generate_story import build_prompt, generate_story, select_story_niche
 
 STORY_FILE = "story.txt"
 RAW_AUDIO_FILE = "narration_raw.wav"
@@ -23,8 +23,6 @@ KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "am_michael")
 KOKORO_LANG = os.environ.get("KOKORO_LANG", "a")
 KOKORO_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 
-# Defaults keep the production pipeline unchanged. Preview/test workflows can
-# override these with environment variables without affecting normal runs.
 TARGET_DURATION = float(os.environ.get("TARGET_DURATION", "90"))
 MIN_DURATION = float(os.environ.get("MIN_DURATION", "65"))
 MAX_SINGLE_DURATION = float(os.environ.get("MAX_SINGLE_DURATION", "119"))
@@ -45,10 +43,7 @@ def ensure_ffmpeg():
 def get_duration(path):
     ensure_ffmpeg()
     result = subprocess.run(
-        [
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", path,
-        ],
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path],
         check=True,
         capture_output=True,
         text=True,
@@ -142,10 +137,7 @@ def master_audio(input_path, output_path):
     ensure_ffmpeg()
     try:
         subprocess.run(
-            [
-                "ffmpeg", "-y", "-loglevel", "error", "-i", input_path,
-                "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", output_path,
-            ],
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", input_path, "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", output_path],
             check=True,
             capture_output=True,
             text=True,
@@ -180,11 +172,7 @@ def generate_word_timestamps(audio_path):
             word = word_info.get("word", "").strip()
             if not word:
                 continue
-            timestamps.append({
-                "word": word,
-                "start": round(float(word_info["start"]), 2),
-                "end": round(float(word_info["end"]), 2),
-            })
+            timestamps.append({"word": word, "start": round(float(word_info["start"]), 2), "end": round(float(word_info["end"]), 2)})
 
     with open(JSON_FILE, "w", encoding="utf-8") as f:
         json.dump(timestamps, f, indent=2)
@@ -218,14 +206,14 @@ def main():
         if attempt > 1 and duration:
             scale = TARGET_DURATION / max(duration, 1)
             word_target = int(round(len(story_text.split()) * scale))
-            # This also works for short preview stories instead of forcing them
-            # back to the production-only 170+ word range.
             lower_bound = max(40, int(base_word_target * 0.65))
             upper_bound = max(lower_bound + 20, int(base_word_target * 1.45))
             word_target = max(lower_bound, min(upper_bound, word_target))
 
         print(f"\n🔁 Story/audio attempt {attempt}/{MAX_STORY_RETRIES} — target {word_target} words")
-        story_text = generate_story(word_target=word_target, niche=None)
+        niche = select_story_niche()
+        prompt = build_prompt(niche, word_target)
+        story_text = generate_story(prompt)
         with open(STORY_FILE, "w", encoding="utf-8") as f:
             f.write(story_text)
 
