@@ -53,12 +53,12 @@ Return ONLY the finished one-paragraph narration.
 """.strip()
 
 
-def generate_preview_story(word_target=72, niche=None):
-    if niche is None:
-        niche = story.select_story_niche()
-
-    prompt = build_preview_prompt(niche, word_target)
-    print(f"🎯 30s preview niche: {niche} | target words: {word_target}")
+def generate_preview_story(prompt):
+    # generate_audio.main() calls generate_story with a complete text prompt.
+    # Preserve that prompt (including its duration-adjusted word target) and
+    # add preview-specific narration guidance rather than treating it as a number.
+    prompt = prompt + "\n\nPREVIEW STYLE: Use one natural spoken paragraph with a strong hook, flowing punctuation, and a satisfying payoff. Return only narration text."
+    print("Generating 30-second preview story from the audio pipeline prompt.")
 
     gemini_key = os.environ.get("GEMINI_API_KEY")
     groq_key = os.environ.get("GROQ_API_KEY")
