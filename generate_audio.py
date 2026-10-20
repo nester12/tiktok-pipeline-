@@ -23,9 +23,9 @@ KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "am_michael")
 KOKORO_LANG = os.environ.get("KOKORO_LANG", "a")
 KOKORO_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 
-TARGET_DURATION = float(os.environ.get("TARGET_DURATION", "90"))
-MIN_DURATION = float(os.environ.get("MIN_DURATION", "65"))
-MAX_SINGLE_DURATION = float(os.environ.get("MAX_SINGLE_DURATION", "119"))
+TARGET_DURATION = float(os.environ.get("TARGET_DURATION", "60"))
+MIN_DURATION = float(os.environ.get("MIN_DURATION", "50"))
+MAX_SINGLE_DURATION = float(os.environ.get("MAX_SINGLE_DURATION", "70"))
 MAX_STORY_RETRIES = int(os.environ.get("MAX_STORY_RETRIES", "2"))
 SAMPLE_RATE = 24000
 JOIN_PAUSE_MS = 45
