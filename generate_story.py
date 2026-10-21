@@ -245,7 +245,7 @@ def generate_with_groq_model(api_key, prompt, model):
                     ],
                     "temperature": 0.95,
                     "max_tokens": 3000,
-                    "reasoning_effort": "medium",
+                    "reasoning_effort": "low",
                     "stream": False,
                 },
                 timeout=REQUEST_TIMEOUT,
