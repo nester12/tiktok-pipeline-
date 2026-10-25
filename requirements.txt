@@ -8,3 +8,10 @@ pillow==9.5.0
 numpy
 gdown
 opencv-python-headless
+
+# SpaCy/Kokoro dependency set from the last successful pipeline (2026-10-24).
+# Newer transitive versions triggered tokenizer OverflowError on 2026-10-25.
+cymem==2.0.13
+murmurhash==1.0.15
+preshed==3.0.13
+srsly==2.5.4
