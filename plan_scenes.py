@@ -11,7 +11,7 @@ from pathlib import Path
 STORY_PATH = Path(os.getenv("STORY_FILE", "story.txt"))
 OUTPUT_PATH = Path(os.getenv("SCENE_PLAN_FILE", "scene_plan.json"))
 SCENE_COUNT = int(os.getenv("SCENE_COUNT", "8"))
-TARGET_SECONDS = float(os.getenv("TARGET_DURATION", "60"))
+TARGET_SECONDS = float(os.getenv("TARGET_DURATION", "90"))
 STYLE = (
     "Vertical 9:16 cinematic dark fantasy horror illustration, atmospheric "
     "lighting, dramatic composition, detailed environment, consistent "
