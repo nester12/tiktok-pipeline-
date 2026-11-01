@@ -7,7 +7,7 @@ import os
 import uuid
 import requests
 
-VIDEO_PATH = "final_short.mp4"
+VIDEO_PATH = os.environ.get("VIDEO_PATH", "final_short.mp4")
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB; Cloudinary requires >5 MB except final chunk
 TIMEOUT = 180
 
@@ -34,7 +34,7 @@ def upload_chunked(video_path, cloud_name, upload_preset):
             }
 
             files = {
-                "file": ("final_short.mp4", chunk, "video/mp4"),
+                "file": (os.path.basename(video_path), chunk, "video/mp4"),
             }
             data = {
                 "upload_preset": upload_preset,
