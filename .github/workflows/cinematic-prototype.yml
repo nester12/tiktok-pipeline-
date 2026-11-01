@@ -1,0 +1,42 @@
+name: cinematic-prototype-safe
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-prototype:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install audio tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+      - name: Generate original horror story and narration
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          KOKORO_VOICE: af_heart
+          TARGET_DURATION: '60'
+        run: python generate_audio.py
+      - name: Prepare timed cinematic scenes
+        run: python plan_scenes.py
+      - name: Upload review assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: horror-story-voice-and-scenes
+          path: |
+            story.txt
+            narration.wav
+            timestamps.json
+            scene_plan.json
+            audio_meta.json
+          retention-days: 7
+
+# Deliberately no image API calls, paid generation, Buffer, or TikTok publishing.
