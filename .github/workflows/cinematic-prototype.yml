@@ -33,6 +33,16 @@ jobs:
         run: python generate_inworld_voice.py
       - name: Preview image generation without paid API call
         run: python generate_scene_images.py
+      - name: Create free scene placeholders for first integration test
+        run: python create_preview_placeholders.py
+      - name: Render private cinematic integration preview
+        run: python render_cinematic.py
+      - name: Upload preview to Cloudinary (not TikTok)
+        env:
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_UPLOAD_PRESET: ${{ secrets.CLOUDINARY_UPLOAD_PRESET }}
+          VIDEO_PATH: cinematic_prototype.mp4
+        run: python upload_to_cloudinary.py
       - name: Upload review assets
         uses: actions/upload-artifact@v4
         with:
@@ -43,6 +53,8 @@ jobs:
             timestamps.json
             scene_plan.json
             audio_meta.json
+            cinematic_prototype.mp4
+            video_url.txt
           retention-days: 7
 
-# Deliberately no image API calls, paid generation, Buffer, or TikTok publishing.
+# Manual test only. No paid image API, email, Buffer, or TikTok publishing.\n# Cloudinary upload may be publicly accessible via its generated URL.
