@@ -59,7 +59,11 @@ def plan_scenes(text, count=SCENE_COUNT, duration=TARGET_SECONDS):
 
 def main():
     story = STORY_PATH.read_text(encoding="utf-8")
-    result = plan_scenes(story)
+    meta_path = Path("audio_meta.json")
+    duration = TARGET_SECONDS
+    if meta_path.exists():
+        duration = float(json.loads(meta_path.read_text(encoding="utf-8"))["duration_seconds"])
+    result = plan_scenes(story, duration=duration)
     OUTPUT_PATH.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Planned {len(result['scenes'])} scenes in {OUTPUT_PATH}")
 
