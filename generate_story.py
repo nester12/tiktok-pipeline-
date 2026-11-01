@@ -19,16 +19,16 @@ GROQ_RETRIES = 2
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 STORY_NICHES = [
-    "a family secret discovered at a gathering",
-    "a roommate who crossed an important boundary",
-    "discovering that someone close has been dishonest",
-    "an event or celebration that changes unexpectedly",
-    "a neighbor disagreement that keeps escalating",
-    "a workplace betrayal by someone trusted",
-    "a housing dispute with a hidden motive",
-    "a friend group falling apart over one secret",
-    "a money dispute that exposes a family secret",
-    "a stranger's small action that turns out to matter much more",
+    "an isolated snowbound village hiding an ancient creature",
+    "a night-shift worker discovering an impossible hospital ward",
+    "a missing person returning with memories that cannot be theirs",
+    "a forest where the same stranger appears every midnight",
+    "a haunted railway station with one forbidden platform",
+    "a family discovering a supernatural secret in an old house",
+    "a remote research facility receiving signals from underground",
+    "a dark fantasy kingdom where shadows steal people's names",
+    "a mountain expedition finding an abandoned settlement",
+    "a mysterious broadcast predicting tomorrow's disappearances",
 ]
 
 
@@ -121,7 +121,7 @@ def build_prompt(niche, word_target):
     notes = load_style_notes()
 
     return f"""
-Write ONE completely original first-person story for short-form text-to-speech narration.
+Write ONE completely original cinematic supernatural horror or dark mystery story for short-form text-to-speech narration.
 
 TOPIC:
 {niche}
@@ -134,13 +134,13 @@ LENGTH:
 NARRATION FORMAT:
 - Output the entire finished story as ONE continuous paragraph.
 - Write for speech, not like an essay or formal prose.
-- It should sound like a real person naturally telling a friend what happened from memory.
+- It should sound like a gripping narrator recounting an unsettling event, with vivid but concise descriptions.
 - Use commas often so connected thoughts flow naturally.
 - Use ... only for genuine hesitation, suspense, remembering something, or a pause before important information.
 - Use an em dash — for an interruption, sudden change of thought, or sharp reveal.
 - Use full stops sparingly; prefer connected spoken rhythm when it sounds natural.
 - Keep dialogue inside the same paragraph.
-- Natural spoken connectors are encouraged where they fit, including phrases such as "and then", "so I'm like", "but here's the thing", "that's when", "he goes", "and at this point", and "which obviously".
+- Natural spoken connectors are encouraged where they fit, including phrases such as "then", "that's when", "before I could move", and "but something was wrong".
 - Do not mechanically add ... or — everywhere. Punctuation must follow the emotion and meaning.
 - Occasional CAPITAL words are allowed for strong emphasis, but use them rarely.
 - Avoid audiobook language, essay transitions, formal narration, and overly polished written sentences.
@@ -152,7 +152,7 @@ STORY QUALITY:
 - Plant 2-4 ordinary-looking details that matter later.
 - Major reveals must connect to something established earlier.
 - A twist should reframe an earlier detail instead of appearing randomly.
-- Keep the narrator believable, casual and immediate.
+- Keep the narrator believable, urgent, atmospheric and immediate.
 - Avoid repeated information, generic moral lessons, hashtags, calls to follow, and fake engagement bait.
 - End with either a satisfying payoff or a deliberate natural cliffhanger.
 
