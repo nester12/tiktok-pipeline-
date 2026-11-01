@@ -230,6 +230,9 @@ def main():
     else:
         print("⚠️ Using the final natural narration after retry limit.")
 
+    if duration <= 80:
+        raise RuntimeError(f"Video must exceed 80 seconds; narration is {duration:.1f}s. No short video will be accepted.")
+
     generate_word_timestamps(AUDIO_FILE)
     save_audio_meta(story_text, duration, measured_wpm)
     print(f"✅ Finished: {len(story_text.split())} words | {duration:.1f}s | voice={KOKORO_VOICE}")
