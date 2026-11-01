@@ -15,6 +15,19 @@ def main():
     if os.getenv("ENABLE_PAID_TTS") != "YES":
         print("Voice preview mode; no provider request")
         return
+    from datetime import datetime, timezone
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    price = float(os.environ["ESTIMATED_TTS_GBP_PER_MILLION_CHARS"])
+    cap = float(os.getenv("MONTHLY_TTS_BUDGET_GBP", "3"))
+    if price <= 0 or cap <= 0:
+        raise ValueError("Set positive TTS price and budget")
+    ledger_file = Path("tts_spend_ledger.json")
+    ledger = json.loads(ledger_file.read_text()) if ledger_file.exists() else {}
+    projected = len(story) * price / 1_000_000
+    if float(ledger.get(month, 0)) + projected > cap:
+        raise RuntimeError("Estimated monthly TTS budget exceeded")
+    ledger[month] = round(float(ledger.get(month, 0)) + projected, 6)
+    ledger_file.write_text(json.dumps(ledger, indent=2))
     key = os.environ["INWORLD_API_KEY"]
     result = requests.post(
         "https://api.inworld.ai/tts/v1/voice",
